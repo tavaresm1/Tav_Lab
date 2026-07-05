@@ -1,0 +1,26 @@
+---
+# Top-level playbook — applies every role in order.
+# Use tags to run slices:
+#   ansible-playbook site.yml --tags base
+#   ansible-playbook site.yml --tags docker,tailscale
+
+- name: Manage Tav-Serv
+  hosts: hypervisors
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Show target facts
+      ansible.builtin.debug:
+        msg: >-
+          Running on {{ ansible_hostname }} ({{ ansible_distribution }}
+          {{ ansible_distribution_version }} — kernel {{ ansible_kernel }})
+      tags: always
+
+  roles:
+    - { role: base,            tags: [base] }
+    - { role: monitoring,      tags: [monitoring] }
+    - { role: docker,          tags: [docker] }
+    - { role: virtualization,  tags: [virtualization, vms] }
+    - { role: tailscale,       tags: [tailscale, net] }
+    - { role: user_env,        tags: [user_env, dotfiles] }

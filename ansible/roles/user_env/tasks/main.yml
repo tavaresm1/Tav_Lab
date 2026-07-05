@@ -1,0 +1,43 @@
+---
+# Minimal user-environment role. Extend as you add dotfiles.
+
+- name: Ensure ~/.ssh exists for managed users
+  ansible.builtin.file:
+    path: "/home/{{ item }}/.ssh"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0700"
+  loop: "{{ docker_users | default([]) }}"
+  tags: [user_env]
+
+# Drop authorized_keys from ansible/roles/user_env/files/authorized_keys
+# (create that file once and it will be enforced from then on)
+- name: Manage authorized_keys
+  ansible.builtin.copy:
+    src: authorized_keys
+    dest: "/home/{{ item }}/.ssh/authorized_keys"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0600"
+  loop: "{{ docker_users | default([]) }}"
+  ignore_errors: true    # file may not exist yet on first run
+  tags: [user_env, ssh]
+
+# tmux config — trivial baseline, extend later
+- name: tmux.conf
+  ansible.builtin.copy:
+    dest: "/home/{{ item }}/.tmux.conf"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0644"
+    content: |
+      # Managed by Ansible.
+      set -g mouse on
+      set -g history-limit 100000
+      set -g default-terminal "screen-256color"
+      set -g base-index 1
+      setw -g pane-base-index 1
+      bind r source-file ~/.tmux.conf \; display "reloaded"
+  loop: "{{ docker_users | default([]) }}"
+  tags: [user_env, tmux]

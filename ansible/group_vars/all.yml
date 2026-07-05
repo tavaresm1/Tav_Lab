@@ -1,0 +1,76 @@
+---
+# Global, non-secret defaults for every host.
+
+timezone: America/New_York
+locale: en_US.UTF-8
+
+# Base package set — always installed
+base_packages:
+  - htop
+  - bottom
+  - ncdu
+  - tmux
+  - iotop
+  - iftop
+  - lsof
+  - strace
+  - tree
+  - pv
+  - rsync
+  - jq
+  - unzip
+  - curl
+  - ca-certificates
+  - gnupg
+  - apt-transport-https
+
+# Hardware/monitoring tools
+hardware_packages:
+  - smartmontools
+  - ipmitool
+  - freeipmi-tools
+  - lm-sensors
+
+# unattended-upgrades
+unattended_upgrades_enabled: true
+
+# Cockpit
+cockpit_enabled: true
+cockpit_extras:
+  - cockpit-machines
+  - cockpit-pcp
+  - cockpit-storaged
+  - cockpit-networkmanager
+  - cockpit-packagekit
+
+# Docker CE from Docker's official Ubuntu repo
+docker_enabled: true
+docker_users:
+  - tavaresm1
+
+# VirtualBox + libvirt/KVM
+virtualization_libvirt_enabled: true
+virtualization_vbox_enabled: true
+
+# Tailscale — flags to pass to `tailscale up`
+tailscale_enabled: true
+tailscale_up_flags:
+  - --ssh
+  - --advertise-routes=192.168.0.0/24
+  - --accept-routes
+
+# Openbox/LXDE cruft to remove
+cleanup_packages:
+  - openbox
+  - obconf
+  - tint2
+  - lxappearance
+  - lxterminal
+  - lxde-settings-daemon
+  - lxde-icon-theme
+  - lxmenu-data
+  - libmenu-cache-bin
+  - libmenu-cache3
+  - libobrender32v5
+  - libobt2v5
+  - pcmanfm

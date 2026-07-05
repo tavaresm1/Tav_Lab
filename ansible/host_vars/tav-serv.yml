@@ -1,0 +1,51 @@
+---
+# Host-specific overrides for tav-serv.
+
+# Hardware profile
+host_role: hypervisor
+host_notes: |
+  Dell PowerEdge R610 (BIOS 6.4.0)
+  1× X5670 (2nd socket empty, upgrade pending)
+  24 GB DDR3-1333 ECC RDIMM in CPU1 bank (6× 4GB Kingston 1Rx4)
+  PERC H700 RAID 0 across 2× 1TB SAS 7200 rpm (SSDs pending)
+  iDRAC6 at 192.168.0.120
+
+# Swapfile: bump from default 2 GB to 8 GB for a VM host
+swapfile_size_mb: 8192
+
+# sysctl knobs
+sysctl_settings:
+  net.ipv4.ip_forward: 1
+  net.ipv6.conf.all.forwarding: 1
+  vm.swappiness: 10
+
+# Docker compose stacks to render + apply on this host
+docker_stacks:
+  dockhand:
+    compose_dir: /opt/stacks/dockhand
+    compose_file: |
+      services:
+        dockhand:
+          image: fnsys/dockhand:latest
+          container_name: dockhand
+          restart: unless-stopped
+          ports:
+            - "3000:3000"
+          volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+            - dockhand_data:/data
+      volumes:
+        dockhand_data:
+
+# VMs (VirtualBox) to declare
+vbox_vms:
+  haos:
+    memory: 8192
+    cpus: 4
+    ostype: Linux_64
+    firmware: efi
+    nic: bridged
+    bridge_iface: eno3
+    disk: /home/tavaresm1/VirtualBox/haos/haos_ova-18.1.vdi
+    vrde_port: 3388
+    vrde_address: 100.80.216.116

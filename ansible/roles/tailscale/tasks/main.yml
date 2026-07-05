@@ -1,0 +1,45 @@
+---
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+  when: tailscale_enabled | default(true)
+  tags: [tailscale, net]
+
+- name: Enable + start tailscaled
+  ansible.builtin.systemd:
+    name: tailscaled
+    enabled: true
+    state: started
+  when: tailscale_enabled | default(true)
+  tags: [tailscale, net]
+
+# We only run `tailscale up` if the node is NOT already logged in.
+# Re-running it with different flags is legal but noisy — prefer `tailscale set`
+# for flag drift, which we do below.
+- name: Detect tailscale login state
+  ansible.builtin.command: tailscale status --json
+  register: ts_status
+  changed_when: false
+  failed_when: false
+  when: tailscale_enabled | default(true)
+  tags: [tailscale]
+
+- name: Bring tailscale up (first-time login)
+  ansible.builtin.command: "tailscale up {{ tailscale_up_flags | join(' ') }}"
+  when:
+    - tailscale_enabled | default(true)
+    - ts_status.stdout is defined
+    - '"NeedsLogin" in ts_status.stdout or "NoState" in ts_status.stdout'
+  changed_when: true
+  tags: [tailscale]
+
+- name: Apply tailscale flag drift (set)
+  ansible.builtin.command: "tailscale set {{ tailscale_up_flags | join(' ') }}"
+  when:
+    - tailscale_enabled | default(true)
+    - ts_status.stdout is defined
+    - '"NeedsLogin" not in ts_status.stdout'
+    - '"NoState" not in ts_status.stdout'
+  changed_when: true
+  tags: [tailscale]

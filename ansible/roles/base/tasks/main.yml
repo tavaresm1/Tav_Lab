@@ -1,0 +1,154 @@
+---
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ timezone }}"
+  tags: base
+
+- name: Ensure /etc/apt/keyrings exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+  tags: base
+
+# -------- Docker apt repo --------
+- name: Docker GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+    force: false
+  tags: [base, docker-repo]
+
+- name: Docker apt source
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ ansible_architecture | replace('x86_64','amd64') }}
+      signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu
+      {{ ansible_distribution_release | default('noble') }}
+      stable
+    filename: docker
+    state: present
+    update_cache: true
+  tags: [base, docker-repo]
+  vars:
+    # Mint's distribution_release is 'zena' but Docker expects the Ubuntu codename.
+    ansible_distribution_release: noble
+
+# -------- Tailscale apt repo --------
+- name: Tailscale keyring
+  ansible.builtin.get_url:
+    url: https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    mode: "0644"
+    force: false
+  tags: [base, tailscale-repo]
+
+- name: Tailscale apt source
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/tailscale.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main
+  tags: [base, tailscale-repo]
+
+- name: Apt update
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 300
+  tags: base
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: "{{ base_packages + hardware_packages }}"
+    state: present
+  tags: base
+
+- name: Remove Openbox/LXDE leftovers
+  ansible.builtin.apt:
+    name: "{{ cleanup_packages }}"
+    state: absent
+    purge: true
+    autoremove: true
+  tags: [base, cleanup]
+
+- name: Sysctl settings
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-tav-serv.conf
+    reload: true
+  loop: "{{ sysctl_settings | dict2items }}"
+  when: sysctl_settings is defined
+  tags: [base, sysctl]
+
+# -------- Swapfile --------
+- name: Stat current swapfile
+  ansible.builtin.stat:
+    path: /swapfile
+  register: swapfile_stat
+  tags: [base, swap]
+
+- name: Detect swapfile size (MB)
+  ansible.builtin.set_fact:
+    swapfile_current_mb: "{{ (swapfile_stat.stat.size / 1024 / 1024) | int if swapfile_stat.stat.exists else 0 }}"
+  tags: [base, swap]
+
+- name: Grow swapfile if too small
+  when: (swapfile_current_mb | int) < (swapfile_size_mb | int)
+  tags: [base, swap]
+  block:
+    - name: Disable swap while we rebuild
+      ansible.builtin.command: swapoff /swapfile
+      when: swapfile_stat.stat.exists
+      changed_when: true
+
+    - name: Allocate new swapfile
+      ansible.builtin.command: "fallocate -l {{ swapfile_size_mb }}M /swapfile"
+      changed_when: true
+
+    - name: Permissions on swapfile
+      ansible.builtin.file:
+        path: /swapfile
+        mode: "0600"
+        owner: root
+        group: root
+
+    - name: mkswap
+      ansible.builtin.command: mkswap /swapfile
+      changed_when: true
+
+    - name: swapon
+      ansible.builtin.command: swapon /swapfile
+      changed_when: true
+
+    - name: Ensure fstab entry
+      ansible.posix.mount:
+        src: /swapfile
+        path: none
+        fstype: swap
+        opts: sw
+        state: present
+
+# -------- Unattended upgrades --------
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - apt-listchanges
+    state: present
+  when: unattended_upgrades_enabled | default(true)
+  tags: [base, unattended]
+
+- name: Enable unattended-upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+  when: unattended_upgrades_enabled | default(true)
+  tags: [base, unattended]

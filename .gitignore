@@ -1,0 +1,23 @@
+*.retry
+*.pyc
+__pycache__/
+.venv/
+venv/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Ansible
+ansible/collections/
+ansible/.ansible/
+ansible/*.retry
+
+# Vault password files should never be committed
+.vault_pass
+.vault_pass.txt
+*.vault_pass
+
+# Local ephemeral files
+*.local
+*.tmp

@@ -1,0 +1,72 @@
+---
+- name: Install Docker CE and plugins
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+  when: docker_enabled | default(true)
+  tags: [docker]
+
+- name: Add users to docker group
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+  loop: "{{ docker_users | default([]) }}"
+  tags: [docker]
+
+- name: Enable + start Docker
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+  tags: [docker]
+
+- name: Ensure log-rotation for containers
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      }
+  notify: restart docker
+  tags: [docker]
+
+# -------- Compose stacks --------
+- name: Ensure per-stack directories
+  ansible.builtin.file:
+    path: "{{ item.value.compose_dir }}"
+    state: directory
+    owner: root
+    group: docker
+    mode: "0750"
+  loop: "{{ docker_stacks | default({}) | dict2items }}"
+  tags: [docker, stacks]
+
+- name: Render compose files
+  ansible.builtin.copy:
+    dest: "{{ item.value.compose_dir }}/docker-compose.yml"
+    content: "{{ item.value.compose_file }}"
+    owner: root
+    group: docker
+    mode: "0640"
+  loop: "{{ docker_stacks | default({}) | dict2items }}"
+  register: compose_written
+  tags: [docker, stacks]
+
+- name: Apply compose stacks
+  ansible.builtin.command:
+    cmd: docker compose up -d --remove-orphans
+    chdir: "{{ item.value.compose_dir }}"
+  loop: "{{ docker_stacks | default({}) | dict2items }}"
+  changed_when: true
+  tags: [docker, stacks]
