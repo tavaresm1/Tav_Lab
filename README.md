@@ -33,6 +33,7 @@ control-node/
   README.md                    Bootstrap steps for the control node
 docs/
   hardware.md                  Physical inventory of the box
+  context/                     Project background — decisions, upgrades in flight, topology, workflow notes
 ```
 
 ---
