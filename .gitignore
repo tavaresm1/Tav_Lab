@@ -18,6 +18,14 @@ ansible/*.retry
 .vault_pass.txt
 *.vault_pass
 
+# Control-node SSH keys — generated per-host, must never be committed
+control-node/ssh_keys/
+*.pem
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+
 # Local ephemeral files
 *.local
 *.tmp

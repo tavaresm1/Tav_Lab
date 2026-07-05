@@ -41,20 +41,26 @@ docs/
 
 ### On the control node (where you run `ansible-playbook`)
 
+**Recommended:** use the containerized control node in `control-node/`. It
+runs on any Docker host (Linux, Windows Docker Desktop, macOS, WSL, or
+Tav-Serv itself) and bundles Ansible + its collections + the SSH client.
+See [control-node/README.md](control-node/README.md) for full bootstrap.
+
+Prerequisites for the containerized path:
+- Docker Engine or Docker Desktop 24+
+- git
+- Network reachability to Tav-Serv (typically via Tailscale)
+
+**Alternative:** run Ansible natively on the control-node host. Needs:
 - Python 3.10+
-- `ansible-core >= 2.16` (Mint 22.3 packages ship 2.16+)
-- `ansible-galaxy` collections:
-  - `ansible.posix` (sysctl, mount)
-  - `community.general` (timezone)
-- SSH client with a private key that matches an entry in
-  `roles/user_env/files/authorized_keys` (or already dropped into
-  `tavaresm1@tav-serv:~/.ssh/authorized_keys`)
+- `ansible-core >= 2.16`
+- Collections: `ansible.posix`, `community.general`, `community.docker`
+- SSH client with a private key authorized on `tavaresm1@tav-serv`
 
-Install:
-
+Install (Debian/Ubuntu/Mint):
 ```bash
 sudo apt install -y ansible ansible-lint
-ansible-galaxy collection install ansible.posix community.general
+ansible-galaxy collection install ansible.posix community.general community.docker
 ```
 
 ### On Tav-Serv (target)
@@ -75,17 +81,28 @@ and service in the current inventory is declared in this repo.
 
 ## Control node
 
-Ansible runs from a dedicated container defined in `control-node/`. Full setup
-in [control-node/README.md](control-node/README.md), but the shape is:
+Ansible runs from a dedicated container defined in `control-node/`. The
+container is **portable** — build it on any Docker host (your workstation,
+a laptop, WSL, another Linux box, or Tav-Serv itself). Full walkthrough,
+including per-platform notes for Docker Desktop on Windows/macOS, is in
+[control-node/README.md](control-node/README.md).
+
+Shape of the bootstrap:
 
 ```bash
-# On Tav-Serv (bootstrap)
-git clone https://github.com/tavaresm1/Tav_Lab.git ~/Tav_Lab
-cd ~/Tav_Lab/control-node
+git clone https://github.com/tavaresm1/Tav_Lab.git
+cd Tav_Lab/control-node
+
+# Generate a dedicated SSH keypair for this control-node host
 mkdir -p ssh_keys && chmod 700 ssh_keys
-ssh-keygen -t ed25519 -f ssh_keys/ansible_control -N '' -C 'ansible-control@tav-serv'
-cat ssh_keys/ansible_control.pub >> ~/.ssh/authorized_keys
+ssh-keygen -t ed25519 -f ssh_keys/ansible_control -N '' \
+           -C "ansible-control@$(hostname)"
+
+# Get ssh_keys/ansible_control.pub into tavaresm1@tav-serv:~/.ssh/authorized_keys
+# (via SSH, another machine that can reach it, or the iDRAC virtual console)
+
 docker compose build
+docker compose run --rm ansible ansible -i inventory/hosts.ini all -m ping
 ```
 
 ## Usage
