@@ -1,0 +1,47 @@
+# Ansible control node for Tav-Serv.
+#
+# Usage from Tav-Serv (once files are in place):
+#
+#   cd ~/control-node                         # or wherever you keep this compose file
+#   docker compose build
+#   docker compose run --rm ansible ansible -i inventory/hosts.ini all -m ping
+#   docker compose run --rm ansible ansible-playbook -i inventory/hosts.ini site.yml
+#
+# The container connects to Tav-Serv over SSH at 100.80.216.116 (Tailscale IP).
+# The SSH key mounted at ~/.ssh/id_ed25519 in the container must match a pubkey
+# in tavaresm1@tav-serv:~/.ssh/authorized_keys.
+
+services:
+  ansible:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ANSIBLE_UID: 1000
+        ANSIBLE_GID: 1000
+    image: tav_lab_ansible:latest
+    container_name: tav_lab_ansible
+    hostname: ansible
+    network_mode: host   # so we can reach Tav-Serv via its Tailscale IP directly
+    environment:
+      REPO_URL: https://github.com/tavaresm1/Tav_Lab.git
+      REPO_BRANCH: main
+      ANSIBLE_HOST_KEY_CHECKING: "False"
+    volumes:
+      # SSH key for reaching Tav-Serv — generate once with:
+      #   ssh-keygen -t ed25519 -f ./ssh_keys/ansible_control -C "ansible-control@tav-serv"
+      # then add the .pub content to tavaresm1@tav-serv:~/.ssh/authorized_keys
+      - ./ssh_keys/ansible_control:/home/ansible/.ssh/id_ed25519:ro
+      - ./ssh_keys/ansible_control.pub:/home/ansible/.ssh/id_ed25519.pub:ro
+
+      # Persist the cloned repo between runs (optional — otherwise it re-clones)
+      - repo_cache:/home/ansible/Tav_Lab
+
+      # Persist known_hosts so we don't re-prompt every run
+      - ssh_state:/home/ansible/.ssh_state
+    stdin_open: true
+    tty: true
+
+volumes:
+  repo_cache:
+  ssh_state:

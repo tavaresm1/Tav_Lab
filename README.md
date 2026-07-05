@@ -26,6 +26,11 @@ ansible/                       Ansible root
     virtualization/            libvirt/KVM + VirtualBox + VM definitions
     tailscale/                 Tailscale package + `up` flags + subnet routes
     user_env/                  ~/.ssh/authorized_keys, dotfiles, tmux config
+control-node/
+  Dockerfile                   Alpine + Ansible + git + openssh-client
+  entrypoint.sh                Clones/pulls Tav_Lab on start
+  docker-compose.yml           Launches the control node against Tav-Serv
+  README.md                    Bootstrap steps for the control node
 docs/
   hardware.md                  Physical inventory of the box
 ```
@@ -68,29 +73,44 @@ and service in the current inventory is declared in this repo.
 
 ---
 
-## Usage
+## Control node
 
-From the control node:
+Ansible runs from a dedicated container defined in `control-node/`. Full setup
+in [control-node/README.md](control-node/README.md), but the shape is:
 
 ```bash
-cd ansible
+# On Tav-Serv (bootstrap)
+git clone https://github.com/tavaresm1/Tav_Lab.git ~/Tav_Lab
+cd ~/Tav_Lab/control-node
+mkdir -p ssh_keys && chmod 700 ssh_keys
+ssh-keygen -t ed25519 -f ssh_keys/ansible_control -N '' -C 'ansible-control@tav-serv'
+cat ssh_keys/ansible_control.pub >> ~/.ssh/authorized_keys
+docker compose build
+```
 
+## Usage
+
+From the control node container (from `~/Tav_Lab/control-node/` on Tav-Serv):
+
+```bash
 # Sanity ping (no changes)
-ansible -i inventory/hosts.ini all -m ping
+docker compose run --rm ansible \
+    ansible -i inventory/hosts.ini all -m ping
 
 # Dry-run (show what would change)
-ansible-playbook -i inventory/hosts.ini site.yml --check --diff
+docker compose run --rm ansible \
+    ansible-playbook -i inventory/hosts.ini site.yml --check --diff
 
 # Apply everything
-ansible-playbook -i inventory/hosts.ini site.yml
+docker compose run --rm ansible \
+    ansible-playbook -i inventory/hosts.ini site.yml
 
 # Apply one slice only
-ansible-playbook -i inventory/hosts.ini site.yml --tags base
-ansible-playbook -i inventory/hosts.ini site.yml --tags docker
-ansible-playbook -i inventory/hosts.ini site.yml --tags virtualization
-ansible-playbook -i inventory/hosts.ini site.yml --tags tailscale
-ansible-playbook -i inventory/hosts.ini site.yml --tags monitoring
-ansible-playbook -i inventory/hosts.ini site.yml --tags user_env
+docker compose run --rm ansible \
+    ansible-playbook -i inventory/hosts.ini site.yml --tags base
+
+# Interactive shell in the container
+docker compose run --rm ansible bash
 ```
 
 Available tags: `base`, `cleanup`, `sysctl`, `swap`, `unattended`, `cockpit`,

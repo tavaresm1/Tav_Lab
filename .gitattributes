@@ -1,0 +1,7 @@
+# Enforce LF line endings for files that get consumed on Linux/containers.
+*.sh        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+Dockerfile  text eol=lf
+*.ini       text eol=lf
+*.cfg       text eol=lf
