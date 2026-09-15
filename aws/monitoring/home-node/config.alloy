@@ -1,0 +1,40 @@
+// Grafana Alloy config for home nodes. __MON_HOST__ is replaced by
+// install-child.sh. Ships the systemd journal to Loki on the monitoring node
+// over the tailnet -- push only, so the monitoring node never dials in.
+
+loki.source.journal "journal" {
+  max_age       = "12h"
+  format_as_json = false
+  labels = {
+    job = "systemd-journal",
+  }
+  relabel_rules = loki.relabel.journal.rules
+  forward_to    = [loki.write.remote.receiver]
+}
+
+// Promote the useful journal fields to labels. Keep this list short -- every
+// label combination is a separate Loki stream, and unit names are already
+// high-ish cardinality.
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal__hostname"]
+    target_label  = "host"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.write "remote" {
+  endpoint {
+    url = "http://__MON_HOST__:3100/loki/api/v1/push"
+  }
+  external_labels = {}
+}

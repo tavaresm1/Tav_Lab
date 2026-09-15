@@ -1,0 +1,610 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Tailnet monitoring node. Graviton EC2 instance joined to your Tailscale tailnet
+  with ZERO inbound security-group rules. Runs Netdata (streaming parent for home
+  nodes), Uptime Kuma (synthetic checks against home hosts), ntfy (alert fan-out)
+  and optionally Loki + Grafana for log aggregation. All service ports are bound
+  to the Tailscale interface address only.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: Network}
+        Parameters: [NetworkStackName, AssignPublicIpv4]
+      - Label: {default: Instance}
+        Parameters: [InstanceType, DeploymentMode, DataVolumeSizeGb, DataVolumeDeleteOnTermination, LatestUbuntuAmi]
+      - Label: {default: Tailscale}
+        Parameters: [TailscaleHostname, TailscaleTag, TailscaleAuthKeyParam]
+      - Label: {default: Secrets and alerting}
+        Parameters: [NetdataStreamKeyParam, GrafanaPasswordParam, AlertEmail]
+
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: mon-network
+    Description: Name of the 01-network.yaml stack to import VPC/subnet from.
+
+  InstanceType:
+    Type: String
+    Default: t4g.medium
+    Description: >
+      Graviton only (the AMI is arm64). t4g.nano is fine for WatchdogOnly.
+      FullStack (Loki + Grafana + Netdata parent) wants t4g.medium minimum.
+    AllowedValues: [t4g.nano, t4g.micro, t4g.small, t4g.medium, t4g.large, t4g.xlarge]
+
+  DeploymentMode:
+    Type: String
+    Default: FullStack
+    Description: >
+      WatchdogOnly = Netdata + Uptime Kuma + ntfy (cheap external eyes).
+      FullStack    = adds Loki + Grafana for centralised logs and dashboards.
+    AllowedValues: [FullStack, WatchdogOnly]
+
+  DataVolumeSizeGb:
+    Type: Number
+    Default: 100
+    MinValue: 8
+    MaxValue: 1000
+    Description: gp3 data volume mounted at /data (Netdata dbengine, Loki, Kuma, Grafana). ~$0.08/GB-mo.
+
+  DataVolumeDeleteOnTermination:
+    Type: String
+    Default: 'false'
+    Description: >
+      false keeps your metric/log history if the instance is replaced or the stack
+      is deleted -- but leaves an orphaned volume you keep paying for. Clean it up
+      by hand when you are done with it.
+    AllowedValues: ['true', 'false']
+
+  AssignPublicIpv4:
+    Type: String
+    Default: 'true'
+    Description: >
+      AWS charges ~$0.005/hr (~$3.65/mo) for a public IPv4 address. Set false to run
+      IPv6-only and avoid it -- Tailscale and Ubuntu mirrors both work over IPv6, but
+      verify before you rely on it.
+    AllowedValues: ['true', 'false']
+
+  TailscaleHostname:
+    Type: String
+    Default: mon-aws
+    Description: MagicDNS hostname this node will claim.
+    AllowedPattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+
+  TailscaleTag:
+    Type: String
+    Default: 'tag:monitor'
+    Description: >
+      ACL tag to advertise. The auth key MUST be created with this tag, or leave this
+      blank to use an untagged (expiring) key. Tagged keys do not expire -- strongly preferred.
+
+  TailscaleAuthKeyParam:
+    Type: String
+    Default: /monitoring/tailscale-authkey
+    Description: >
+      SSM Parameter Store SecureString holding the Tailscale auth key. Create it
+      BEFORE deploying (see README). Never passed as a CFN parameter value, so it
+      does not land in UserData or stack history.
+
+  NetdataStreamKeyParam:
+    Type: String
+    Default: /monitoring/netdata-stream-key
+    Description: SSM SecureString holding the Netdata streaming API key (a UUID). Home children use the same value.
+
+  GrafanaPasswordParam:
+    Type: String
+    Default: /monitoring/grafana-admin-password
+    Description: SSM SecureString the instance WRITES a generated Grafana admin password to on first boot.
+
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: >
+      Optional. Creates an SNS topic and CloudWatch alarms on EC2 status checks, so you
+      get told if the monitoring node itself dies. Leave blank to skip.
+
+  LatestUbuntuAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id
+    Description: Resolved at deploy time from Canonical's public SSM parameter. Do not change unless you know why.
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+  UsePublicIpv4: !Equals [!Ref AssignPublicIpv4, 'true']
+
+Resources:
+
+  # ---------------------------------------------------------------- IAM
+  # No SSH key pair is created anywhere in this stack. Access is via Tailscale
+  # SSH, or SSM Session Manager as break-glass if Tailscale fails to come up.
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      Policies:
+        - PolicyName: bootstrap
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadBootstrapSecrets
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TailscaleAuthKeyParam}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${NetdataStreamKeyParam}'
+              - Sid: WriteGeneratedGrafanaPassword
+                Effect: Allow
+                Action: ssm:PutParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${GrafanaPasswordParam}'
+              - Sid: SsmKmsViaParameterStore
+                Effect: Allow
+                Action: [kms:Decrypt, kms:Encrypt]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
+              - Sid: SignalBootstrapResult
+                Effect: Allow
+                Action: cloudformation:SignalResource
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # ---------------------------------------------------------------- Security
+  # Deliberately no SecurityGroupIngress. Tailscale is outbound-only (UDP 41641
+  # plus HTTPS to the coordination server) and Netdata children / Alloy PUSH to
+  # this node over the tailnet, so nothing ever needs to reach it from the
+  # internet. Egress is open so it can reach package repos, SSM and DERP relays.
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Monitoring node - no inbound, all outbound
+      VpcId: !ImportValue
+        Fn::Sub: '${NetworkStackName}-VpcId'
+      SecurityGroupEgress:
+        - Description: All IPv4 egress
+          IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+        - Description: All IPv6 egress
+          IpProtocol: '-1'
+          CidrIpv6: ::/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-sg'
+
+  # ---------------------------------------------------------------- Instance
+  MonitorInstance:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT25M
+    Properties:
+      ImageId: !Ref LatestUbuntuAmi
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      Monitoring: false
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !ImportValue
+            Fn::Sub: '${NetworkStackName}-SubnetId'
+          GroupSet: [!Ref InstanceSecurityGroup]
+          AssociatePublicIpAddress: !If [UsePublicIpv4, true, false]
+          Ipv6AddressCount: 1
+          DeleteOnTermination: true
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 20
+            Encrypted: true
+            DeleteOnTermination: true
+        # Data volume is a block device mapping rather than a separate
+        # AWS::EC2::Volume + VolumeAttachment on purpose: a VolumeAttachment
+        # DependsOn the instance, but the instance is not CREATE_COMPLETE until
+        # it signals, and it cannot signal until /data is mounted. That is a
+        # deadlock. This avoids it.
+        - DeviceName: /dev/sdf
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref DataVolumeSizeGb
+            Encrypted: true
+            DeleteOnTermination: !Ref DataVolumeDeleteOnTermination
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-${TailscaleHostname}'
+        - Key: Role
+          Value: monitoring
+        - Key: DeploymentMode
+          Value: !Ref DeploymentMode
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # -e matters: on any failure the EXIT trap signals FAILURE to CFN, so a
+          # broken bootstrap rolls back immediately instead of waiting out the
+          # 25-minute timeout.
+          set -euxo pipefail
+          exec > >(tee -a /var/log/monitoring-bootstrap.log) 2>&1
+
+          export DEBIAN_FRONTEND=noninteractive
+          export AWS_DEFAULT_REGION=${AWS::Region}
+          export HOME=/root
+          # Wait out unattended-upgrades rather than racing it for the dpkg lock.
+          APT_OPTS="-o DPkg::Lock::Timeout=600"
+
+          RESULT=FAILURE
+          IID=""
+
+          signal_cfn() {
+            TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
+              -H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)
+            IID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+              http://169.254.169.254/latest/meta-data/instance-id || true)
+            aws cloudformation signal-resource \
+              --stack-name ${AWS::StackName} \
+              --logical-resource-id MonitorInstance \
+              --unique-id "$IID" \
+              --status "$RESULT" || true
+          }
+          trap signal_cfn EXIT
+
+          apt-get $APT_OPTS update -y
+          apt-get $APT_OPTS install -y curl unzip ca-certificates gnupg jq rsync
+
+          # ---- AWS CLI v2 (Ubuntu's packaged awscli lags; we need signal-resource)
+          curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip -o /tmp/awscliv2.zip
+          unzip -q -o /tmp/awscliv2.zip -d /tmp
+          /tmp/aws/install --update
+          hash -r
+          aws --version
+
+          # ---- fetch secrets from SSM (never in UserData / stack history)
+          TSKEY=$(aws ssm get-parameter --name "${TailscaleAuthKeyParam}" \
+            --with-decryption --query Parameter.Value --output text)
+          NDKEY=$(aws ssm get-parameter --name "${NetdataStreamKeyParam}" \
+            --with-decryption --query Parameter.Value --output text)
+
+          # ---- find, format and mount the data volume
+          # /dev/sdf shows up as an nvme namespace on Nitro, so identify it as
+          # "the disk that is not the one holding /".
+          ROOT_SRC=$(findmnt -no SOURCE / || true)
+          ROOT_DISK=$(lsblk -no PKNAME "$ROOT_SRC" 2>/dev/null | head -1 | tr -d ' ' || true)
+          # Refuse to guess if the root disk cannot be positively identified --
+          # otherwise the loop below could select it and mount it at /data.
+          test -n "$ROOT_DISK"
+          DEV=""
+          for i in $(seq 1 60); do
+            CAND=$(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}' \
+              | grep -v "^$ROOT_DISK$" | head -1 || true)
+            if [ -n "$CAND" ] && [ -b "/dev/$CAND" ]; then DEV="/dev/$CAND"; break; fi
+            echo "waiting for data volume ($i)"; sleep 5
+          done
+          test -n "$DEV"
+
+          if ! blkid "$DEV" >/dev/null 2>&1; then
+            mkfs.ext4 -L mondata "$DEV"
+          fi
+          mkdir -p /data
+          FSUUID=$(blkid -s UUID -o value "$DEV")
+          grep -q "$FSUUID" /etc/fstab || \
+            echo "UUID=$FSUUID /data ext4 defaults,nofail 0 2" >> /etc/fstab
+          mount -a
+          mountpoint -q /data
+
+          mkdir -p /data/netdata/cache /data/kuma /data/ntfy/cache /data/ntfy/lib /data/loki /data/grafana
+          chown -R 10001:10001 /data/loki
+          chown -R 472:472 /data/grafana
+
+          # ---- Docker CE from upstream
+          CODENAME=$(. /etc/os-release && echo $VERSION_CODENAME)
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $CODENAME stable" \
+            > /etc/apt/sources.list.d/docker.list
+
+          # ---- Tailscale from upstream
+          curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$CODENAME.noarmor.gpg" \
+            -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+          curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$CODENAME.tailscale-keyring.list" \
+            -o /etc/apt/sources.list.d/tailscale.list
+
+          apt-get $APT_OPTS update -y
+          apt-get $APT_OPTS install -y docker-ce docker-ce-cli containerd.io \
+            docker-buildx-plugin docker-compose-plugin tailscale
+          systemctl enable --now docker
+
+          # Cap container log growth so /var never fills silently.
+          cat > /etc/docker/daemon.json <<'DOCKERJSON'
+          {
+            "log-driver": "json-file",
+            "log-opts": {"max-size": "20m", "max-file": "5"}
+          }
+          DOCKERJSON
+          systemctl restart docker
+
+          # ---- join the tailnet
+          TS_ARGS=""
+          if [ -n "${TailscaleTag}" ]; then TS_ARGS="--advertise-tags=${TailscaleTag}"; fi
+          tailscale up --authkey "$TSKEY" --hostname "${TailscaleHostname}" --ssh $TS_ARGS
+          BIND_IP=""
+          for i in $(seq 1 30); do
+            BIND_IP=$(tailscale ip -4 2>/dev/null | head -1 || true)
+            [ -n "$BIND_IP" ] && break
+            echo "waiting for tailscale ip ($i)"; sleep 5
+          done
+          test -n "$BIND_IP"
+          echo "tailnet address: $BIND_IP"
+
+          # ---- Netdata (host install, acts as the streaming parent)
+          curl -fsSL https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh
+          sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry
+
+          systemctl stop netdata || true
+          # Bind-mount the dbengine cache onto /data. Version-proof: avoids guessing
+          # which netdata.conf section names the cache directory in this release.
+          rsync -a /var/cache/netdata/ /data/netdata/cache/ || true
+          grep -q '/var/cache/netdata' /etc/fstab || \
+            echo "/data/netdata/cache /var/cache/netdata none bind,nofail 0 0" >> /etc/fstab
+          mount -a
+          chown -R netdata:netdata /var/cache/netdata || true
+
+          # Accept streams from home children. Their source addresses are tailnet
+          # CGNAT addresses. Netdata stays bound to all interfaces because it can
+          # start before tailscale0 exists on boot; the empty security group and
+          # this allow-list are the actual controls.
+          cat > /etc/netdata/stream.conf <<STREAMCONF
+          [$NDKEY]
+              enabled = yes
+              default memory mode = dbengine
+              health enabled by default = auto
+              allow from = 100.64.0.0/10 127.0.0.1
+          STREAMCONF
+          chown netdata:netdata /etc/netdata/stream.conf
+          chmod 640 /etc/netdata/stream.conf
+
+          # health_alarm_notify.conf is sourced as shell, so appended assignments win.
+          cat >> /etc/netdata/health_alarm_notify.conf <<NOTIFYCONF
+
+          # --- managed by CloudFormation bootstrap ---
+          SEND_NTFY="YES"
+          DEFAULT_RECIPIENT_NTFY="http://127.0.0.1:8080/netdata"
+          NOTIFYCONF
+          systemctl start netdata
+
+          # ---- generate a Grafana admin password and stash it in SSM
+          # hex, not base64-piped-through-tr: a pipeline here can SIGPIPE and
+          # abort the script under 'set -o pipefail'.
+          GFPASS=$(openssl rand -hex 16)
+          aws ssm put-parameter --name "${GrafanaPasswordParam}" --type SecureString \
+            --value "$GFPASS" --overwrite >/dev/null
+          printf '%s\n' "$GFPASS" > /root/.grafana_admin_password
+          chmod 600 /root/.grafana_admin_password
+
+          # ---- the container stack
+          mkdir -p /opt/monitoring/provisioning/datasources
+
+          cat > /opt/monitoring/docker-compose.yml <<COMPOSE
+          services:
+            uptime-kuma:
+              image: louislam/uptime-kuma:1
+              container_name: uptime-kuma
+              restart: unless-stopped
+              volumes:
+                - /data/kuma:/app/data
+              ports:
+                - "$BIND_IP:3001:3001"
+
+            ntfy:
+              image: binwiederhier/ntfy:v2
+              container_name: ntfy
+              command: serve
+              restart: unless-stopped
+              environment:
+                NTFY_BASE_URL: "http://$BIND_IP:8080"
+                NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
+                NTFY_AUTH_FILE: /var/lib/ntfy/auth.db
+                NTFY_AUTH_DEFAULT_ACCESS: read-write
+                NTFY_ATTACHMENT_CACHE_DIR: /var/cache/ntfy/attachments
+              volumes:
+                - /data/ntfy/cache:/var/cache/ntfy
+                - /data/ntfy/lib:/var/lib/ntfy
+              ports:
+                - "127.0.0.1:8080:80"
+                - "$BIND_IP:8080:80"
+
+            loki:
+              image: grafana/loki:3.1.1
+              container_name: loki
+              profiles: ["full"]
+              restart: unless-stopped
+              user: "10001:10001"
+              command: -config.file=/etc/loki/config.yml
+              volumes:
+                - /opt/monitoring/loki.yml:/etc/loki/config.yml:ro
+                - /data/loki:/loki
+              ports:
+                - "$BIND_IP:3100:3100"
+
+            grafana:
+              image: grafana/grafana-oss:11.2.0
+              container_name: grafana
+              profiles: ["full"]
+              restart: unless-stopped
+              user: "472:472"
+              depends_on: [loki]
+              environment:
+                GF_SECURITY_ADMIN_PASSWORD: "$GFPASS"
+                GF_USERS_ALLOW_SIGN_UP: "false"
+                GF_SERVER_ROOT_URL: "http://$BIND_IP:3000"
+              volumes:
+                - /data/grafana:/var/lib/grafana
+                - /opt/monitoring/provisioning:/etc/grafana/provisioning
+              ports:
+                - "$BIND_IP:3000:3000"
+          COMPOSE
+
+          cat > /opt/monitoring/loki.yml <<'LOKICONF'
+          auth_enabled: false
+          server:
+            http_listen_port: 3100
+            log_level: warn
+          common:
+            instance_addr: 127.0.0.1
+            path_prefix: /loki
+            storage:
+              filesystem:
+                chunks_directory: /loki/chunks
+                rules_directory: /loki/rules
+            replication_factor: 1
+            ring:
+              kvstore:
+                store: inmemory
+          schema_config:
+            configs:
+              - from: 2024-01-01
+                store: tsdb
+                object_store: filesystem
+                schema: v13
+                index:
+                  prefix: index_
+                  period: 24h
+          limits_config:
+            retention_period: 720h
+            reject_old_samples: false
+            allow_structured_metadata: true
+          compactor:
+            working_directory: /loki/compactor
+            delete_request_store: filesystem
+            retention_enabled: true
+          LOKICONF
+
+          # Only Loki is provisioned. Netdata's own UI on :19999 is the metrics
+          # front end -- its /api/v1/allmetrics endpoint is a Prometheus *scrape*
+          # target, not a query API, so it cannot back a Grafana Prometheus
+          # datasource. Add real Prometheus later if you want that.
+          cat > /opt/monitoring/provisioning/datasources/loki.yml <<'DSCONF'
+          apiVersion: 1
+          datasources:
+            - name: Loki
+              type: loki
+              access: proxy
+              url: http://loki:3100
+              isDefault: true
+              jsonData:
+                maxLines: 5000
+          DSCONF
+
+          cd /opt/monitoring
+          if [ "${DeploymentMode}" = "FullStack" ]; then
+            docker compose --profile full up -d
+          else
+            docker compose up -d
+          fi
+
+          RESULT=SUCCESS
+          echo "bootstrap complete"
+
+  # ---------------------------------------------------------------- Self-watch
+  # The monitoring node cannot alert on its own death. These alarms live in the
+  # AWS control plane, outside the instance, and are effectively free.
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
+    Properties:
+      DisplayName: !Sub '${AWS::StackName}-alerts'
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  SystemStatusAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlertEmail
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-system-status-failed'
+      AlarmDescription: Underlying AWS host is unhealthy. Recovers the instance automatically.
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref MonitorInstance
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref AlertTopic
+        - !Sub 'arn:${AWS::Partition}:automate:${AWS::Region}:ec2:recover'
+
+  InstanceStatusAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlertEmail
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-instance-status-failed'
+      AlarmDescription: Instance-level status check failing (OS wedged, network gone).
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_Instance
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref MonitorInstance
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+
+Outputs:
+  InstanceId:
+    Value: !Ref MonitorInstance
+
+  DeploymentMode:
+    Value: !Ref DeploymentMode
+
+  NetdataUrl:
+    Description: Metrics UI, over the tailnet only.
+    Value: !Sub 'http://${TailscaleHostname}:19999'
+
+  UptimeKumaUrl:
+    Description: Synthetic checks and status page. First visit sets the admin user.
+    Value: !Sub 'http://${TailscaleHostname}:3001'
+
+  NtfyUrl:
+    Description: Alert fan-out. Subscribe your phone to the 'netdata' topic.
+    Value: !Sub 'http://${TailscaleHostname}:8080'
+
+  GrafanaUrl:
+    Description: FullStack only. Log exploration over Loki.
+    Value: !Sub 'http://${TailscaleHostname}:3000'
+
+  GrafanaPasswordCommand:
+    Description: Retrieve the generated Grafana admin password.
+    Value: !Sub 'aws ssm get-parameter --name ${GrafanaPasswordParam} --with-decryption --query Parameter.Value --output text'
+
+  BreakGlassAccess:
+    Description: Use if Tailscale fails to come up. Requires the SSM plugin locally.
+    Value: !Sub 'aws ssm start-session --target ${MonitorInstance}'
+
+  BootstrapLog:
+    Description: Where to look when a deploy times out.
+    Value: /var/log/monitoring-bootstrap.log
+
+  ChildStreamConfigHint:
+    Description: What to put in /etc/netdata/stream.conf on each home node.
+    Value: !Sub '[stream] enabled=yes destination=${TailscaleHostname}:19999 api key=<value of ${NetdataStreamKeyParam}>'

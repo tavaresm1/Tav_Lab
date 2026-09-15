@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Minimal dual-stack VPC for the tailnet monitoring node. One public subnet, one
+  IGW, no NAT gateway (a NAT GW would cost ~$32/mo and buys nothing here -- the
+  instance has zero inbound security-group rules, so a public subnet is safe).
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: 10.30.0.0/16
+    Description: IPv4 CIDR for the VPC. Must not overlap your home LAN or Tailscale CGNAT range (100.64.0.0/10).
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  SubnetCidr:
+    Type: String
+    Default: 10.30.1.0/24
+    Description: IPv4 CIDR for the public subnet. Must sit inside VpcCidr.
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc'
+
+  # Amazon-provided /56. Free, and lets you run the instance without a
+  # chargeable public IPv4 address if you want to save ~$3.65/mo.
+  Ipv6Cidr:
+    Type: AWS::EC2::VPCCidrBlock
+    Properties:
+      VpcId: !Ref Vpc
+      AmazonProvidedIpv6CidrBlock: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-igw'
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: Ipv6Cidr
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref SubnetCidr
+      Ipv6CidrBlock: !Select [0, !Cidr [!Select [0, !GetAtt Vpc.Ipv6CidrBlocks], 1, 64]]
+      AssignIpv6AddressOnCreation: true
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public-rt'
+
+  DefaultRouteV4:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  DefaultRouteV6:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationIpv6CidrBlock: ::/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export:
+      Name: !Sub '${AWS::StackName}-VpcId'
+
+  SubnetId:
+    Value: !Ref PublicSubnet
+    Export:
+      Name: !Sub '${AWS::StackName}-SubnetId'
+
+  SubnetAz:
+    Value: !GetAtt PublicSubnet.AvailabilityZone
+    Export:
+      Name: !Sub '${AWS::StackName}-SubnetAz'
