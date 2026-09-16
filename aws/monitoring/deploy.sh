@@ -7,6 +7,9 @@
 #   ./deploy.sh monitoring   deploy/update the instance stack
 #   ./deploy.sh all          secrets check + network + monitoring
 #   ./deploy.sh status       show stack status, outputs, and how to reach things
+#   ./deploy.sh logs         read the instance bootstrap log from CloudWatch --
+#                            works even after a rollback deleted the instance
+#   ./deploy.sh orphans      list EBS volumes left behind by a rollback/terminate
 #   ./deploy.sh destroy      tear both stacks down (asks first)
 #
 # Env overrides:
@@ -22,6 +25,8 @@
 #   PUBLIC_IPV4         true | false   default true
 #   DISABLE_ROLLBACK    1 = leave a failed stack standing so you can read the
 #                       bootstrap log instead of losing it to rollback
+#   LOG_GROUP           default /tavlab/monitoring-bootstrap
+#   SINCE               default 24h, passed to 'aws logs tail'
 
 set -euo pipefail
 
@@ -35,6 +40,8 @@ TS_HOSTNAME="${TS_HOSTNAME:-mon-aws}"
 TS_TAG="${TS_TAG:-tag:monitor}"
 ALERT_EMAIL="${ALERT_EMAIL:-}"
 PUBLIC_IPV4="${PUBLIC_IPV4:-true}"
+LOG_GROUP="${LOG_GROUP:-/tavlab/monitoring-bootstrap}"
+SINCE="${SINCE:-24h}"
 
 TS_KEY_PARAM=/monitoring/tailscale-authkey
 ND_KEY_PARAM=/monitoring/netdata-stream-key
@@ -177,7 +184,48 @@ cmd_monitoring() {
       AlertEmail="$ALERT_EMAIL" \
       TailscaleAuthKeyParam="$TS_KEY_PARAM" \
       NetdataStreamKeyParam="$ND_KEY_PARAM" \
-      GrafanaPasswordParam="$GF_PW_PARAM"
+      GrafanaPasswordParam="$GF_PW_PARAM" \
+      BootstrapLogGroupName="$LOG_GROUP"
+}
+
+# The instance ships /var/log/monitoring-bootstrap.log here on both success and
+# failure, so this is the one diagnostic that survives a CREATE_FAILED rollback
+# deleting the instance out from under you. One stream per instance id.
+cmd_logs() {
+  if ! $AWS logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" \
+       --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q .; then
+    echo "no log group $LOG_GROUP in $AWS_REGION."
+    echo "Either the instance never got as far as installing the AWS CLI, or you"
+    echo "deployed with a template older than the CloudWatch shipping change."
+    return 1
+  fi
+
+  echo "== streams in $LOG_GROUP (newest first)"
+  $AWS logs describe-log-streams --log-group-name "$LOG_GROUP" \
+    --order-by LastEventTime --descending --max-items 10 \
+    --query 'logStreams[].[logStreamName,lastEventTimestamp]' --output table || true
+
+  echo
+  echo "== log contents (last $SINCE)"
+  echo "   look for '=== result=' and '=== failed near line' -- that is the verdict,"
+  echo "   and '=== STAGE:' markers to see how far the bootstrap got."
+  $AWS logs tail "$LOG_GROUP" --since "$SINCE"
+}
+
+# A rollback terminates the instance, but DataVolumeDeleteOnTermination defaults
+# to false, so the 100GB gp3 data volume is left behind -- detached, unused, and
+# still billing at ~$0.08/GB-month.
+cmd_orphans() {
+  echo "== available (detached) EBS volumes in $AWS_REGION"
+  $AWS ec2 describe-volumes \
+    --filters Name=status,Values=available \
+    --query 'Volumes[].[VolumeId,Size,VolumeType,CreateTime,Tags[?Key==`Name`].Value|[0]]' \
+    --output table
+
+  echo "Anything listed above is detached and billing. Delete with:"
+  echo "  aws --region $AWS_REGION ec2 delete-volume --volume-id vol-xxxxxxxx"
+  echo "Check the size/date against your monitoring deploy before deleting --"
+  echo "this lists every available volume in the region, not just ours."
 }
 
 cmd_status() {
@@ -191,6 +239,19 @@ cmd_status() {
   $AWS cloudformation describe-stacks --stack-name "$MONITORING_STACK" \
     --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table 2>/dev/null \
     || echo "not deployed"
+
+  local st
+  st=$($AWS cloudformation describe-stacks --stack-name "$MONITORING_STACK" \
+    --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)
+  case "$st" in
+    *FAILED*|*ROLLBACK*)
+      echo
+      echo ">> $MONITORING_STACK is $st -- read the bootstrap log with:"
+      echo "     ./deploy.sh logs"
+      echo "   then check for a leftover data volume with:"
+      echo "     ./deploy.sh orphans"
+      ;;
+  esac
 }
 
 cmd_destroy() {
@@ -201,10 +262,12 @@ cmd_destroy() {
   $AWS cloudformation delete-stack --stack-name "$NETWORK_STACK"
   $AWS cloudformation wait stack-delete-complete --stack-name "$NETWORK_STACK"
   echo
-  echo "Done. Two things CloudFormation did NOT clean up:"
+  echo "Done. Four things CloudFormation did NOT clean up:"
   echo "  - the /data EBS volume, if DataVolumeDeleteOnTermination was false"
+  echo "    -> run './deploy.sh orphans' to find it; it bills until deleted"
   echo "  - the node entry in your Tailscale admin console"
   echo "  - SSM parameters under /monitoring/ (delete by hand if you are finished)"
+  echo "  - the $LOG_GROUP CloudWatch group (kept on purpose so post-mortems survive)"
 }
 
 case "${1:-}" in
@@ -214,6 +277,8 @@ case "${1:-}" in
   monitoring) cmd_monitoring ;;
   all)        cmd_preflight; cmd_secrets; cmd_network; cmd_monitoring; cmd_status ;;
   status)     cmd_status ;;
+  logs)       cmd_logs ;;
+  orphans)    cmd_orphans ;;
   destroy)    cmd_destroy ;;
-  *)          sed -n '2,24p' "$0"; exit 1 ;;
+  *)          sed -n '2,30p' "$0"; exit 1 ;;
 esac

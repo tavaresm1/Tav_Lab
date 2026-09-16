@@ -17,6 +17,8 @@ Metadata:
         Parameters: [TailscaleHostname, TailscaleTag, TailscaleAuthKeyParam]
       - Label: {default: Secrets and alerting}
         Parameters: [NetdataStreamKeyParam, GrafanaPasswordParam, AlertEmail]
+      - Label: {default: Diagnostics}
+        Parameters: [BootstrapLogGroupName]
 
 Parameters:
   NetworkStackName:
@@ -96,6 +98,15 @@ Parameters:
     Default: /monitoring/grafana-admin-password
     Description: SSM SecureString the instance WRITES a generated Grafana admin password to on first boot.
 
+  BootstrapLogGroupName:
+    Type: String
+    Default: /tavlab/monitoring-bootstrap
+    Description: >
+      CloudWatch Logs group the instance ships its bootstrap log to, on both
+      success and failure. Created by the instance rather than by this stack on
+      purpose: a CFN-managed group would either be deleted by the rollback that
+      you need it to survive, or collide on the next deploy attempt.
+
   AlertEmail:
     Type: String
     Default: ''
@@ -150,6 +161,16 @@ Resources:
                 Condition:
                   StringEquals:
                     kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
+              - Sid: ShipBootstrapLogToCloudWatch
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:PutRetentionPolicy
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${BootstrapLogGroupName}'
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${BootstrapLogGroupName}:*'
               - Sid: SignalBootstrapResult
                 Effect: Allow
                 Action: cloudformation:SignalResource
@@ -247,44 +268,114 @@ Resources:
 
           RESULT=FAILURE
           IID=""
+          STAGE=init
+          FAILED_CMD=""
+          FAILED_LINE=""
+          LG="${BootstrapLogGroupName}"
 
-          signal_cfn() {
+          # Record where we died. Expanded when the trap fires, not now.
+          trap 'FAILED_CMD=$BASH_COMMAND; FAILED_LINE=$LINENO' ERR
+
+          stage() { STAGE="$1"; echo "=== STAGE: $1"; }
+
+          # Ship the bootstrap log to CloudWatch Logs so it SURVIVES ROLLBACK.
+          # Without this, a failed stack deletes the instance and the only
+          # explanation of the failure along with it.
+          ship_log() {
+            [ -n "$IID" ] || return 0
+            aws logs create-log-stream --log-group-name "$LG" \
+              --log-stream-name "$IID" >/dev/null 2>&1 || true
+            {
+              echo "=== result=$RESULT stage=$STAGE"
+              if [ -n "$FAILED_CMD" ]; then
+                echo "=== failed near line $FAILED_LINE running: $FAILED_CMD"
+              fi
+              echo
+              tail -c 180000 /var/log/monitoring-bootstrap.log
+            } > /tmp/bootstrap.tail 2>/dev/null || true
+            python3 -c "import json,time;print(json.dumps([{'timestamp':int(time.time()*1000),'message':open('/tmp/bootstrap.tail',errors='replace').read()}]))" \
+              > /tmp/logevents.json 2>/dev/null || true
+            aws logs put-log-events --log-group-name "$LG" \
+              --log-stream-name "$IID" \
+              --log-events file:///tmp/logevents.json >/dev/null 2>&1 || true
+          }
+
+          finish() {
             TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
               -H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)
             IID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
               http://169.254.169.254/latest/meta-data/instance-id || true)
+            ship_log
             aws cloudformation signal-resource \
               --stack-name ${AWS::StackName} \
               --logical-resource-id MonitorInstance \
               --unique-id "$IID" \
               --status "$RESULT" || true
           }
-          trap signal_cfn EXIT
+          trap finish EXIT
 
+          stage apt
           apt-get $APT_OPTS update -y
-          apt-get $APT_OPTS install -y curl unzip ca-certificates gnupg jq rsync
+          apt-get $APT_OPTS install -y curl unzip ca-certificates gnupg jq rsync \
+            python3 util-linux
 
           # ---- AWS CLI v2 (Ubuntu's packaged awscli lags; we need signal-resource)
+          stage awscli
           curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip -o /tmp/awscliv2.zip
           unzip -q -o /tmp/awscliv2.zip -d /tmp
           /tmp/aws/install --update
           hash -r
           aws --version
 
+          # Create the log group before anything that can fail interestingly.
+          stage logsetup
+          aws logs create-log-group --log-group-name "$LG" >/dev/null 2>&1 || true
+          aws logs put-retention-policy --log-group-name "$LG" \
+            --retention-in-days 14 >/dev/null 2>&1 || true
+
           # ---- fetch secrets from SSM (never in UserData / stack history)
-          TSKEY=$(aws ssm get-parameter --name "${TailscaleAuthKeyParam}" \
-            --with-decryption --query Parameter.Value --output text)
-          NDKEY=$(aws ssm get-parameter --name "${NetdataStreamKeyParam}" \
-            --with-decryption --query Parameter.Value --output text)
+          # Retried: IMDS role credentials can lag the instance by a few seconds,
+          # and a transient throttle here should not kill the whole deploy.
+          stage ssm
+          get_param() {
+            n=0
+            until [ "$n" -ge 5 ]; do
+              if v=$(aws ssm get-parameter --name "$1" --with-decryption \
+                       --query Parameter.Value --output text 2>/tmp/ssm.err); then
+                printf '%s' "$v"
+                return 0
+              fi
+              n=$((n+1))
+              echo "ssm get-parameter $1 attempt $n failed: $(cat /tmp/ssm.err)"
+              sleep 5
+            done
+            return 1
+          }
+          TSKEY=$(get_param "${TailscaleAuthKeyParam}")
+          NDKEY=$(get_param "${NetdataStreamKeyParam}")
+          test -n "$TSKEY"
+          test -n "$NDKEY"
 
           # ---- find, format and mount the data volume
           # /dev/sdf shows up as an nvme namespace on Nitro, so identify it as
           # "the disk that is not the one holding /".
+          stage volume
+          echo "--- block devices as seen at this point:"
+          lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS || true
+          findmnt -no SOURCE / || true
+
           ROOT_SRC=$(findmnt -no SOURCE / || true)
           ROOT_DISK=$(lsblk -no PKNAME "$ROOT_SRC" 2>/dev/null | head -1 | tr -d ' ' || true)
+          if [ -z "$ROOT_DISK" ]; then
+            # Fallback: walk the tree and take the disk whose partition holds /.
+            ROOT_DISK=$(lsblk -rno NAME,TYPE,MOUNTPOINTS \
+              | awk '$2=="disk"{d=$1} $3=="/"{print d; exit}' || true)
+          fi
           # Refuse to guess if the root disk cannot be positively identified --
           # otherwise the loop below could select it and mount it at /data.
+          echo "root source=$ROOT_SRC root disk=$ROOT_DISK"
           test -n "$ROOT_DISK"
+
           DEV=""
           for i in $(seq 1 60); do
             CAND=$(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}' \
@@ -292,13 +383,29 @@ Resources:
             if [ -n "$CAND" ] && [ -b "/dev/$CAND" ]; then DEV="/dev/$CAND"; break; fi
             echo "waiting for data volume ($i)"; sleep 5
           done
+          echo "data device=$DEV"
           test -n "$DEV"
 
           if ! blkid "$DEV" >/dev/null 2>&1; then
             mkfs.ext4 -L mondata "$DEV"
           fi
           mkdir -p /data
-          FSUUID=$(blkid -s UUID -o value "$DEV")
+
+          # udev needs to settle before blkid can see a just-created filesystem.
+          # Without this retry the UUID can come back empty and fstab gets a
+          # bare "UUID=" line, which then fails at mount -a.
+          udevadm settle || true
+          FSUUID=""
+          for i in $(seq 1 12); do
+            FSUUID=$(blkid -s UUID -o value "$DEV" 2>/dev/null || true)
+            [ -n "$FSUUID" ] && break
+            echo "waiting for filesystem UUID on $DEV ($i)"
+            udevadm settle || true
+            sleep 5
+          done
+          echo "data fs uuid=$FSUUID"
+          test -n "$FSUUID"
+
           grep -q "$FSUUID" /etc/fstab || \
             echo "UUID=$FSUUID /data ext4 defaults,nofail 0 2" >> /etc/fstab
           mount -a
@@ -309,6 +416,7 @@ Resources:
           chown -R 472:472 /data/grafana
 
           # ---- Docker CE from upstream
+          stage docker
           CODENAME=$(. /etc/os-release && echo $VERSION_CODENAME)
           install -m 0755 -d /etc/apt/keyrings
           curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -317,6 +425,7 @@ Resources:
             > /etc/apt/sources.list.d/docker.list
 
           # ---- Tailscale from upstream
+          stage tailscale_pkg
           curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$CODENAME.noarmor.gpg" \
             -o /usr/share/keyrings/tailscale-archive-keyring.gpg
           curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$CODENAME.tailscale-keyring.list" \
@@ -337,6 +446,7 @@ Resources:
           systemctl restart docker
 
           # ---- join the tailnet
+          stage tailscale_up
           TS_ARGS=""
           if [ -n "${TailscaleTag}" ]; then TS_ARGS="--advertise-tags=${TailscaleTag}"; fi
           tailscale up --authkey "$TSKEY" --hostname "${TailscaleHostname}" --ssh $TS_ARGS
@@ -350,6 +460,7 @@ Resources:
           echo "tailnet address: $BIND_IP"
 
           # ---- Netdata (host install, acts as the streaming parent)
+          stage netdata
           curl -fsSL https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh
           sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry
 
@@ -386,6 +497,7 @@ Resources:
           systemctl start netdata
 
           # ---- generate a Grafana admin password and stash it in SSM
+          stage grafana_pw
           # hex, not base64-piped-through-tr: a pipeline here can SIGPIPE and
           # abort the script under 'set -o pipefail'.
           GFPASS=$(openssl rand -hex 16)
@@ -395,6 +507,7 @@ Resources:
           chmod 600 /root/.grafana_admin_password
 
           # ---- the container stack
+          stage compose
           mkdir -p /opt/monitoring/provisioning/datasources
 
           cat > /opt/monitoring/docker-compose.yml <<COMPOSE
@@ -508,6 +621,7 @@ Resources:
                 maxLines: 5000
           DSCONF
 
+          stage compose_up
           cd /opt/monitoring
           if [ "${DeploymentMode}" = "FullStack" ]; then
             docker compose --profile full up -d
@@ -602,8 +716,14 @@ Outputs:
     Value: !Sub 'aws ssm start-session --target ${MonitorInstance}'
 
   BootstrapLog:
-    Description: Where to look when a deploy times out.
+    Description: Where to look on the instance itself.
     Value: /var/log/monitoring-bootstrap.log
+
+  BootstrapLogCommand:
+    Description: >
+      Read the bootstrap log from CloudWatch. This SURVIVES rollback, so use it to
+      diagnose a CREATE_FAILED even after the instance has been deleted.
+    Value: !Sub 'aws logs tail ${BootstrapLogGroupName} --since 2h'
 
   ChildStreamConfigHint:
     Description: What to put in /etc/netdata/stream.conf on each home node.

@@ -277,9 +277,44 @@ CloudFormation when bootstrap finishes; the timeout is 25 minutes.
 DISABLE_ROLLBACK=1 MODE=FullStack ALERT_EMAIL=you@example.com ./deploy.sh monitoring
 ```
 
-Without it, a bootstrap failure rolls the stack back and deletes the instance —
-taking the log that explains the failure with it. With it, the instance survives for
-inspection and you delete the stack by hand afterwards.
+Without it, a bootstrap failure rolls the stack back and deletes the instance. With
+it, the instance survives for inspection and you delete the stack by hand afterwards.
+
+### If it fails, read the log from CloudWatch
+
+The instance ships its full bootstrap log to CloudWatch Logs **on both success and
+failure**, before it signals CloudFormation. That copy survives rollback, so you can
+read it even after the instance has been deleted:
+
+```bash
+./deploy.sh logs
+```
+
+Look for three things in the output:
+
+| Marker | Meaning |
+| --- | --- |
+| `=== STAGE: <name>` | how far the bootstrap got — the last one printed is where it died |
+| `=== result=FAILURE stage=<name>` | the verdict line, written by the exit trap |
+| `=== failed near line N running: <cmd>` | the exact command that returned non-zero |
+
+The stages, in order: `apt`, `awscli`, `logsetup`, `ssm`, `volume`, `docker`,
+`tailscale_pkg`, `tailscale_up`, `netdata`, `grafana_pw`, `compose`, `compose_up`.
+
+This is why `DISABLE_ROLLBACK=1` is now a convenience rather than a necessity — but
+keep using it on a first deploy, because a surviving instance lets you fix things
+interactively instead of redeploying to test each guess.
+
+### Also check for an orphaned volume
+
+`DataVolumeDeleteOnTermination` defaults to `false` on purpose — your metrics and logs
+should not evaporate because a stack update replaced the instance. The flip side is
+that a **failed** deploy leaves the data volume behind, detached and still billing
+(~$8/mo for 100GB):
+
+```bash
+./deploy.sh orphans
+```
 
 ### Watching the bootstrap live
 
@@ -581,11 +616,17 @@ Three things this does **not** clean up, by design:
 
 # Part 10 — Troubleshooting
 
+**Start here for any deploy failure:** `./deploy.sh logs`. That reads the bootstrap log
+out of CloudWatch, which survives the rollback that deletes the instance. See
+[3.3](#33-deploy-the-monitoring-node) for how to read the stage markers.
+
 | Symptom | Cause and fix |
 |---|---|
-| Stack fails, no instance left to inspect | Rollback deleted it. Re-run with `DISABLE_ROLLBACK=1`. |
-| `CREATE_FAILED` on `MonitorInstance` with "signal FAILURE" | Bootstrap hit an error. `aws ssm start-session` and read `/var/log/monitoring-bootstrap.log`. |
-| 25-minute timeout, no signal at all | Failure happened *before* AWS CLI v2 installed, so it couldn't signal. Almost always apt or network. Check `/var/log/cloud-init-output.log`. |
+| Stack fails, no instance left to inspect | Rollback deleted it, but not the log. `./deploy.sh logs`. Then `./deploy.sh orphans` — the data volume outlives the instance and keeps billing. |
+| `CREATE_FAILED` on `MonitorInstance` with "signal FAILURE" | Bootstrap hit an error and the exit trap reported it honestly. `./deploy.sh logs` and read the `=== failed near line` line. If the instance is still up (`DISABLE_ROLLBACK=1`), `aws ssm start-session` and read `/var/log/monitoring-bootstrap.log` directly. |
+| 25-minute timeout, no signal at all | Failure happened *before* AWS CLI v2 installed, so it could neither ship the log nor signal. Almost always apt or network. Check `/var/log/cloud-init-output.log` on the box. |
+| Failed at `stage ssm` | The instance role couldn't read the SecureString, or KMS denied the decrypt. The log echoes the real API error per retry attempt (5 tries, 5s apart). Confirm the parameter names match what you passed and that they are the same region as the stack. |
+| Failed at `stage volume` | Device never appeared, or `blkid` returned no UUID for a filesystem that was just created. The log dumps `lsblk` and `findmnt` output before the wait loop — compare the disk list against what you expected. |
 | `mon-aws` never appears in `tailscale status` | Bad/expired/already-used auth key, or `tag:monitor` not defined in ACLs. On the box: `tailscale status`, `journalctl -u tailscaled`. |
 | `tailscale up` fails with a tag error | The auth key wasn't created *with* `tag:monitor`. Generate a new tagged key, update SSM, rebuild the instance. |
 | `aws ssm start-session` fails | Missing plugin (step 1.2), or the instance has no outbound internet to reach SSM endpoints. |
@@ -617,6 +658,11 @@ Three things this does **not** clean up, by design:
   everything inbound.
 - **Netdata backfills on reconnect**, so a home internet blip leaves a gap that
   mostly heals rather than a permanent hole.
+- **The bootstrap log is shipped to CloudWatch by the instance, not by a
+  CloudFormation-managed log group.** A group declared in the template would either be
+  deleted by the same rollback whose evidence you need, or collide on the next attempt.
+  The instance creates it with a 14-day retention and it is deliberately left behind by
+  `destroy` (~pennies, and post-mortems shouldn't self-destruct).
 
 ## Is AWS the right place for this?
 
@@ -637,7 +683,16 @@ Statically verified: `cfn-lint` clean on both templates; the extracted UserData 
 compose, Loki, datasource YAML and `daemon.json` all parse; `deploy.sh` and
 `install-child.sh` are syntax-clean.
 
-**Not deployed, so not runtime-tested.** Likely first-boot friction, in order:
+**Deploy attempt 2026-09-15 failed** at `MonitorInstance` — "Received FAILURE signal",
+94 seconds after launch. Everything up to the instance created cleanly. Because the
+signal *arrived*, the AWS CLI was installed and had working credentials, which puts the
+failure at the SSM secret fetch or the volume detect/format step. The rollback deleted
+the instance and its log, so the exact cause is not recoverable from that run. The
+CloudWatch shipping, ERR trap, stage markers, retrying SSM fetch and `udevadm settle`
+retry described above were all added in response; a repeat failure will name its own
+cause. **No cause has been confirmed — do not treat any of those fixes as "the fix".**
+
+Other likely first-boot friction, in order:
 
 1. `SEND_NTFY` support in Netdata's `health_alarm_notify.conf` — probably present in
    current builds, not certain. Part 7.1 verifies it and gives the fallback.
