@@ -280,11 +280,27 @@ DISABLE_ROLLBACK=1 MODE=FullStack ALERT_EMAIL=you@example.com ./deploy.sh monito
 Without it, a bootstrap failure rolls the stack back and deletes the instance. With
 it, the instance survives for inspection and you delete the stack by hand afterwards.
 
-### If it fails, read the log from CloudWatch
+The deploy follows the bootstrap log live while it blocks — the instance flushes to
+CloudWatch at every stage boundary, so you see progress as it happens rather than a
+silent 10-minute wait. `WATCH=0` disables it.
 
-The instance ships its full bootstrap log to CloudWatch Logs **on both success and
-failure**, before it signals CloudFormation. That copy survives rollback, so you can
-read it even after the instance has been deleted:
+### If it fails, you get a diagnostic file automatically
+
+On a failed deploy, `deploy.sh` collects everything into a single local
+`diag-<timestamp>.txt` and prints the verdict. You can also run it on demand:
+
+```bash
+./deploy.sh diag
+```
+
+That file has, in order: stack status, the failure events only, the full bootstrap log
+from CloudWatch, status-check alarm history (i.e. did auto-recovery fire), CloudTrail
+`RecoverInstance` events, detached volumes still billing, and the full event history.
+It is one file to read or hand over.
+
+The bootstrap log lives in CloudWatch **on both success and failure**, written before
+the instance signals CloudFormation, so it survives the rollback that deletes the
+instance. On its own:
 
 ```bash
 ./deploy.sh logs
@@ -616,9 +632,8 @@ Three things this does **not** clean up, by design:
 
 # Part 10 — Troubleshooting
 
-**Start here for any deploy failure:** `./deploy.sh logs`. That reads the bootstrap log
-out of CloudWatch, which survives the rollback that deletes the instance. See
-[3.3](#33-deploy-the-monitoring-node) for how to read the stage markers.
+**Start here for any deploy failure:** `./deploy.sh diag`. One file, verdict at the top.
+See [3.3](#33-deploy-the-monitoring-node) for how to read the stage markers.
 
 | Symptom | Cause and fix |
 |---|---|
@@ -626,6 +641,7 @@ out of CloudWatch, which survives the rollback that deletes the instance. See
 | `CREATE_FAILED` on `MonitorInstance` with "signal FAILURE" | Bootstrap hit an error and the exit trap reported it honestly. `./deploy.sh logs` and read the `=== failed near line` line. If the instance is still up (`DISABLE_ROLLBACK=1`), `aws ssm start-session` and read `/var/log/monitoring-bootstrap.log` directly. |
 | 25-minute timeout, no signal at all | Failure happened *before* AWS CLI v2 installed, so it could neither ship the log nor signal. Almost always apt or network. Check `/var/log/cloud-init-output.log` on the box. |
 | Failed at `stage ssm` | The instance role couldn't read the SecureString, or KMS denied the decrypt. The log echoes the real API error per retry attempt (5 tries, 5s apart). Confirm the parameter names match what you passed and that they are the same region as the stack. |
+| Got an EC2 "instance recovered" email, node went unresponsive, stack rolled back | The `StatusCheckFailed_System` alarm fired `ec2:recover` when it shouldn't have. Fixed 2026-09-17: `TreatMissingData` was `breaching`, which counts the absence of status-check data as a failure — and that data is legitimately absent on a launching instance and during recovery itself, making it self-reinforcing. Now `missing`, with 2-of-3 datapoints. Note that recovery preserves the instance id, so cloud-init will **not** re-run UserData afterwards: if recovery fires mid-bootstrap the stack can never be signalled and must be redeployed, not waited on. |
 | Failed at `stage volume` | Device never appeared, or `blkid` returned no UUID for a filesystem that was just created. The log dumps `lsblk` and `findmnt` output before the wait loop — compare the disk list against what you expected. |
 | `mon-aws` never appears in `tailscale status` | Bad/expired/already-used auth key, or `tag:monitor` not defined in ACLs. On the box: `tailscale status`, `journalctl -u tailscaled`. |
 | `tailscale up` fails with a tag error | The auth key wasn't created *with* `tag:monitor`. Generate a new tagged key, update SSM, rebuild the instance. |

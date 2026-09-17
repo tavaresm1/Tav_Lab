@@ -267,45 +267,66 @@ Resources:
           APT_OPTS="-o DPkg::Lock::Timeout=600"
 
           RESULT=FAILURE
-          IID=""
           STAGE=init
           FAILED_CMD=""
           FAILED_LINE=""
           LG="${BootstrapLogGroupName}"
+          BOOTLOG=/var/log/monitoring-bootstrap.log
+          SHIPPED=0
+          LOGREADY=0
+
+          # IMDSv2 needs no AWS CLI, so get the instance id immediately: the EXIT
+          # trap needs it to signal CFN even if we die in the first few seconds.
+          IMDS_TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
+            -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" || true)
+          IID=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+            http://169.254.169.254/latest/meta-data/instance-id || true)
 
           # Record where we died. Expanded when the trap fires, not now.
           trap 'FAILED_CMD=$BASH_COMMAND; FAILED_LINE=$LINENO' ERR
 
-          stage() { STAGE="$1"; echo "=== STAGE: $1"; }
-
-          # Ship the bootstrap log to CloudWatch Logs so it SURVIVES ROLLBACK.
-          # Without this, a failed stack deletes the instance and the only
-          # explanation of the failure along with it.
-          ship_log() {
-            [ -n "$IID" ] || return 0
-            aws logs create-log-stream --log-group-name "$LG" \
-              --log-stream-name "$IID" >/dev/null 2>&1 || true
-            {
-              echo "=== result=$RESULT stage=$STAGE"
-              if [ -n "$FAILED_CMD" ]; then
-                echo "=== failed near line $FAILED_LINE running: $FAILED_CMD"
+          # Ship the bootstrap log to CloudWatch Logs so it SURVIVES ROLLBACK --
+          # otherwise a failed stack deletes the instance and the only explanation
+          # of the failure with it. Ships only the bytes written since the last
+          # call, so 'aws logs tail --follow' shows progress LIVE rather than
+          # nothing at all until the bootstrap is already over.
+          ship_chunk() {
+            { set +x; } 2>/dev/null
+            if [ "$LOGREADY" = "1" ]; then
+              local total
+              total=$(wc -c < "$BOOTLOG" 2>/dev/null | tr -d ' ' || echo 0)
+              if [ "$total" -gt "$SHIPPED" ]; then
+                tail -c "+$((SHIPPED + 1))" "$BOOTLOG" 2>/dev/null \
+                  | tail -c 200000 > /tmp/chunk.txt || true
+                SHIPPED="$total"
+                if [ -s /tmp/chunk.txt ]; then
+                  python3 -c "import json,time;print(json.dumps([{'timestamp':int(time.time()*1000),'message':open('/tmp/chunk.txt',errors='replace').read()}]))" \
+                    > /tmp/logevents.json 2>/dev/null || true
+                  aws logs put-log-events --log-group-name "$LG" \
+                    --log-stream-name "$IID" \
+                    --log-events file:///tmp/logevents.json >/dev/null 2>&1 || true
+                fi
               fi
-              echo
-              tail -c 180000 /var/log/monitoring-bootstrap.log
-            } > /tmp/bootstrap.tail 2>/dev/null || true
-            python3 -c "import json,time;print(json.dumps([{'timestamp':int(time.time()*1000),'message':open('/tmp/bootstrap.tail',errors='replace').read()}]))" \
-              > /tmp/logevents.json 2>/dev/null || true
-            aws logs put-log-events --log-group-name "$LG" \
-              --log-stream-name "$IID" \
-              --log-events file:///tmp/logevents.json >/dev/null 2>&1 || true
+            fi
+            set -x
           }
 
+          # Every stage boundary flushes to CloudWatch, so the last stage you can
+          # see in 'aws logs tail' is where the bootstrap currently is (or died).
+          stage() { STAGE="$1"; echo "=== STAGE: $1"; ship_chunk; }
+
           finish() {
-            TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
-              -H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)
-            IID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-              http://169.254.169.254/latest/meta-data/instance-id || true)
-            ship_log
+            RC=$?
+            trap - ERR
+            # tee is a separate process; give it a moment to flush the trace
+            # output of whatever just failed before we read the file.
+            sleep 2
+            echo "=== result=$RESULT stage=$STAGE exit=$RC"
+            if [ -n "$FAILED_CMD" ]; then
+              echo "=== failed near line $FAILED_LINE running: $FAILED_CMD"
+            fi
+            sleep 1
+            ship_chunk
             aws cloudformation signal-resource \
               --stack-name ${AWS::StackName} \
               --logical-resource-id MonitorInstance \
@@ -327,11 +348,15 @@ Resources:
           hash -r
           aws --version
 
-          # Create the log group before anything that can fail interestingly.
-          stage logsetup
+          # Open the CloudWatch channel before anything that can fail
+          # interestingly. From here on every stage() streams to it.
           aws logs create-log-group --log-group-name "$LG" >/dev/null 2>&1 || true
           aws logs put-retention-policy --log-group-name "$LG" \
             --retention-in-days 14 >/dev/null 2>&1 || true
+          aws logs create-log-stream --log-group-name "$LG" \
+            --log-stream-name "$IID" >/dev/null 2>&1 || true
+          LOGREADY=1
+          stage logsetup
 
           # ---- fetch secrets from SSM (never in UserData / stack history)
           # Retried: IMDS role credentials can lag the instance by a few seconds,
@@ -644,12 +669,29 @@ Resources:
         - Protocol: email
           Endpoint: !Ref AlertEmail
 
+  # TreatMissingData MUST be 'missing' on both of these, not 'breaching'.
+  #
+  # StatusCheckFailed_* is only published while the instance is RUNNING. It is
+  # absent during pending, stopping, stopped, starting -- and during an
+  # auto-recovery, which is itself a stop/start. Treating absence as a failure
+  # therefore creates a loop on the system alarm: recover stops the instance ->
+  # metric goes missing -> missing counts as breaching -> alarm re-fires recover.
+  # The instance gets stopped/started repeatedly and looks "unresponsive".
+  #
+  # It is also wrong on a brand-new instance, which publishes no status-check
+  # datapoints for the first couple of minutes. A fresh alarm with 'breaching'
+  # goes straight to ALARM on an instance that is perfectly healthy.
   SystemStatusAlarm:
     Type: AWS::CloudWatch::Alarm
     Condition: HasAlertEmail
     Properties:
       AlarmName: !Sub '${AWS::StackName}-system-status-failed'
-      AlarmDescription: Underlying AWS host is unhealthy. Recovers the instance automatically.
+      AlarmDescription: >
+        Underlying AWS host is unhealthy. Recovers the instance automatically.
+        NOTE: recovery preserves the instance id, so cloud-init will NOT re-run
+        UserData afterwards. That is fine once the node is built, but if recovery
+        fires during the initial bootstrap the stack can never be signalled and
+        will time out -- redeploy rather than waiting.
       Namespace: AWS/EC2
       MetricName: StatusCheckFailed_System
       Dimensions:
@@ -657,10 +699,13 @@ Resources:
           Value: !Ref MonitorInstance
       Statistic: Maximum
       Period: 60
-      EvaluationPeriods: 2
+      # 2 of the last 3 minutes: rides out a single scraped datapoint without
+      # waiting long enough to matter for a genuine host failure.
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 2
       Threshold: 0
       ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: breaching
+      TreatMissingData: missing
       AlarmActions:
         - !Ref AlertTopic
         - !Sub 'arn:${AWS::Partition}:automate:${AWS::Region}:ec2:recover'
@@ -678,10 +723,11 @@ Resources:
           Value: !Ref MonitorInstance
       Statistic: Maximum
       Period: 60
-      EvaluationPeriods: 3
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
       Threshold: 0
       ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: breaching
+      TreatMissingData: missing
       AlarmActions: [!Ref AlertTopic]
 
 Outputs:

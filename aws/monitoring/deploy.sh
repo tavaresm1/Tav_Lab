@@ -9,6 +9,9 @@
 #   ./deploy.sh status       show stack status, outputs, and how to reach things
 #   ./deploy.sh logs         read the instance bootstrap log from CloudWatch --
 #                            works even after a rollback deleted the instance
+#   ./deploy.sh diag         collect stack events + bootstrap log + alarm history
+#                            into one diag-*.txt file. Runs automatically on a
+#                            failed 'monitoring' deploy.
 #   ./deploy.sh orphans      list EBS volumes left behind by a rollback/terminate
 #   ./deploy.sh destroy      tear both stacks down (asks first)
 #
@@ -27,6 +30,7 @@
 #                       bootstrap log instead of losing it to rollback
 #   LOG_GROUP           default /tavlab/monitoring-bootstrap
 #   SINCE               default 24h, passed to 'aws logs tail'
+#   WATCH               1 (default) = follow the bootstrap log live during deploy
 
 set -euo pipefail
 
@@ -48,6 +52,11 @@ ND_KEY_PARAM=/monitoring/netdata-stream-key
 GF_PW_PARAM=/monitoring/grafana-admin-password
 
 AWS="aws --region $AWS_REGION"
+
+# AWS CLI v2 pipes output through 'less' by default, which injects
+# ':...skipping...' markers into anything you redirect to a file. That is what
+# made the first captured error log unparseable. Never remove this.
+export AWS_PAGER=""
 
 die() { echo "error: $*" >&2; exit 1; }
 have_param() { $AWS ssm get-parameter --name "$1" >/dev/null 2>&1; }
@@ -165,7 +174,28 @@ cmd_monitoring() {
     echo ">> rollback DISABLED -- a failed stack will be left in place for debugging"
   fi
 
+  # Follow the bootstrap log live while CFN blocks. The instance flushes to
+  # CloudWatch at every stage boundary, so this shows real progress. The group
+  # will not exist on a first-ever deploy, hence the wait loop.
+  local tail_pid=""
+  if [ "${WATCH:-1}" = "1" ]; then
+    (
+      for _ in $(seq 1 60); do
+        if $AWS logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" \
+             --query 'logGroups[0].logGroupName' --output text 2>/dev/null \
+             | grep -q .; then
+          $AWS logs tail "$LOG_GROUP" --follow --since 5m 2>/dev/null
+          exit 0
+        fi
+        sleep 10
+      done
+    ) &
+    tail_pid=$!
+    echo ">> following $LOG_GROUP live (WATCH=0 to disable)"
+  fi
+
   echo ">> deploying $MONITORING_STACK (mode=$MODE type=$INSTANCE_TYPE data=${DATA_GB}GB)"
+  local rc=0
   $AWS cloudformation deploy \
     --stack-name "$MONITORING_STACK" \
     --template-file 02-monitoring.yaml \
@@ -185,7 +215,80 @@ cmd_monitoring() {
       TailscaleAuthKeyParam="$TS_KEY_PARAM" \
       NetdataStreamKeyParam="$ND_KEY_PARAM" \
       GrafanaPasswordParam="$GF_PW_PARAM" \
-      BootstrapLogGroupName="$LOG_GROUP"
+      BootstrapLogGroupName="$LOG_GROUP" || rc=$?
+
+  if [ -n "$tail_pid" ]; then
+    sleep 5   # let the last flushed chunk arrive before we cut the tail off
+    kill "$tail_pid" 2>/dev/null || true
+    wait "$tail_pid" 2>/dev/null || true
+  fi
+
+  if [ "$rc" -ne 0 ]; then
+    echo
+    echo ">> deploy FAILED (exit $rc) -- collecting diagnostics"
+    cmd_diag || true
+    return "$rc"
+  fi
+}
+
+# Collect everything needed to explain a failure into ONE local file, so it can
+# be read or handed over without hunting through six consoles. Ordered so the
+# verdict is at the top and the raw material below it.
+cmd_diag() {
+  local out="diag-$(date -u +%Y%m%d-%H%M%SZ).txt"
+  {
+    echo "# monitoring deploy diagnostics"
+    echo "# region=$AWS_REGION stack=$MONITORING_STACK generated=$(date -u +%FT%TZ)"
+    echo
+
+    echo "===== 1. stack status"
+    $AWS cloudformation describe-stacks --stack-name "$MONITORING_STACK" \
+      --query 'Stacks[0].[StackStatus,StackStatusReason]' --output text 2>&1 || true
+    echo
+
+    echo "===== 2. why it failed (failure events only, oldest first)"
+    $AWS cloudformation describe-stack-events --stack-name "$MONITORING_STACK" \
+      --query 'reverse(StackEvents[?contains(ResourceStatus,`FAILED`)].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason])' \
+      --output text 2>&1 || true
+    echo
+
+    echo "===== 3. bootstrap log from CloudWatch (survives rollback)"
+    echo "# look for '=== STAGE:', '=== result=' and '=== failed near line'"
+    $AWS logs tail "$LOG_GROUP" --since "$SINCE" 2>&1 || true
+    echo
+
+    echo "===== 4. status-check alarm history (did auto-recovery fire?)"
+    for a in "$MONITORING_STACK-system-status-failed" \
+             "$MONITORING_STACK-instance-status-failed"; do
+      echo "--- $a"
+      $AWS cloudwatch describe-alarm-history --alarm-name "$a" \
+        --history-item-type StateUpdate --max-records 20 \
+        --query 'AlarmHistoryItems[].[Timestamp,HistorySummary]' --output text 2>&1 || true
+    done
+    echo
+
+    echo "===== 5. EC2 instance events / recovery actions (last 24h, via CloudTrail)"
+    $AWS cloudtrail lookup-events \
+      --lookup-attributes AttributeKey=EventName,AttributeValue=RecoverInstance \
+      --query 'Events[].[EventTime,Username,CloudTrailEvent]' --output text 2>&1 \
+      | head -40 || true
+    echo
+
+    echo "===== 6. detached volumes still billing"
+    $AWS ec2 describe-volumes --filters Name=status,Values=available \
+      --query 'Volumes[].[VolumeId,Size,VolumeType,CreateTime]' --output text 2>&1 || true
+    echo
+
+    echo "===== 7. full stack event history"
+    $AWS cloudformation describe-stack-events --stack-name "$MONITORING_STACK" \
+      --query 'reverse(StackEvents[].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason])' \
+      --output text 2>&1 || true
+  } > "$out" 2>&1
+
+  echo "wrote $out ($(wc -l < "$out" | tr -d ' ') lines)"
+  echo
+  echo "== verdict (sections 1-2)"
+  sed -n '/===== 1/,/===== 3/p' "$out" | head -30
 }
 
 # The instance ships /var/log/monitoring-bootstrap.log here on both success and
@@ -278,6 +381,7 @@ case "${1:-}" in
   all)        cmd_preflight; cmd_secrets; cmd_network; cmd_monitoring; cmd_status ;;
   status)     cmd_status ;;
   logs)       cmd_logs ;;
+  diag)       cmd_diag ;;
   orphans)    cmd_orphans ;;
   destroy)    cmd_destroy ;;
   *)          sed -n '2,30p' "$0"; exit 1 ;;
