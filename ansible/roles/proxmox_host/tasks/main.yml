@@ -70,7 +70,22 @@
       {{ ansible_hostname }} — {{ ansible_distribution }}
       {{ ansible_distribution_version }}, kernel {{ ansible_kernel }},
       {{ ansible_processor_vcpus }} vCPU, {{ ansible_memtotal_mb }} MB RAM.
-      pve_node is set to '{{ pve_node }}' — it must match the node name PVE
-      itself uses (`pvesh get /nodes --output-format json`), which is normally
-      the short hostname.
+      pve_node='{{ pve_node }}', inventory alias '{{ inventory_hostname }}'.
+  tags: [proxmox_host]
+
+# The inventory calls this box tav-serv; PVE calls the node `pve`. That mismatch
+# is fine and deliberate, but pve_node must match what PVE uses, or every
+# proxmox_kvm call fails against a node that does not exist — reported as an
+# opaque API error, not a name problem. Catch it here instead.
+- name: Assert pve_node matches the node's real name
+  ansible.builtin.assert:
+    that:
+      - pve_node == ansible_hostname
+    fail_msg: >-
+      pve_node is '{{ pve_node }}' but this host's hostname is
+      '{{ ansible_hostname }}'. PVE names the node after the hostname, so
+      group_vars/autobase.yml must say `pve_node: {{ ansible_hostname }}`.
+      Confirm with `pvesh get /nodes --output-format json`. Do not rename the
+      PVE node to match the repo — fix the variable.
+    success_msg: "pve_node '{{ pve_node }}' matches the node name."
   tags: [proxmox_host]

@@ -17,11 +17,20 @@
 # Set to true once you have verified every value in this block.
 autobase_preflight_confirmed: false
 
-# --- Proxmox node (tav-serv, the R610) ---
-pve_node: tav-serv                # `pvesh get /nodes` — the node NAME, normally the short hostname
-pve_api_host: tav-serv            # host:8006 the API is reached on
-pve_storage: local-lvm            # `pvesm status` — must have ~180 GB free
-pve_bridge: vmbr0                 # `ip -br addr` / /etc/network/interfaces
+# --- Proxmox node (the R610 we call tav-serv) ---
+#
+# CONFIRMED 2026-09-18 from `hostname`, `pvesm status`, `ip -br addr` on the box.
+#
+# The PVE node name is `pve`, NOT tav-serv. "tav-serv" is what we call the
+# physical machine — it was the Mint-era hostname — but the Proxmox installer
+# named the node `pve` and that is what the API, /etc/pve/nodes/ and every VM
+# config key off. Do not "fix" this by renaming the node: a PVE node rename means
+# moving /etc/pve/nodes/<name> and every guest config with the cluster filesystem
+# live. `tav-serv` survives as the inventory alias only (see inventory/hosts.ini).
+pve_node: pve                     # `pvesh get /nodes` — the node NAME
+pve_api_host: 192.168.1.226       # host:8006 the API is reached on
+pve_storage: local-lvm            # lvmthin, 844 GB free of 976 GB — plenty for 152 GB of guests
+pve_bridge: vmbr0                 # UP, holds 192.168.1.226/24, enslaves nic1
 pve_api_user: ansible@pve         # `@pve` is the PVE auth REALM here, not a hostname
 pve_api_token_id: automation
 pve_api_validate_certs: false     # PVE ships a self-signed cert
@@ -33,10 +42,12 @@ pve_api_validate_certs: false     # PVE ships a self-signed cert
 autobase_subnet_cidr: 192.168.1.0/24
 autobase_subnet_prefix: 24
 
-# STILL UNCONFIRMED — inferred, verify before the first run:
-#   ip -br addr; ip route show default        # on tav-serv
-#   grep -E "address|gateway" /etc/network/interfaces
+# CONFIRMED 2026-09-18: `ip route show default` → default via 192.168.1.1 dev vmbr0
 autobase_gateway: 192.168.1.1
+
+# STILL UNCONFIRMED — inferred from the gateway, which is the usual case for a
+# consumer router but not guaranteed. Check on the box:
+#   resolvectl status || cat /etc/resolv.conf
 autobase_nameservers:
   - 192.168.1.1
 autobase_searchdomains:
@@ -57,7 +68,22 @@ autobase_cluster_vip: 192.168.1.40
 # inventory_hostname in [autobase_guests]; group_vars/autobase_guests.yml
 # derives ansible_host from the `ip` field here.
 #
+# VMIDs CONFIRMED FREE 2026-09-18: `qm list` shows 100 (NAS), 101 (Kieran-Craft),
+# 102 (Tav-Assistant), 103 (Hermes), 104 (KCraft-b, stopped). Nothing near 8000.
+#
 # RAM budget: 2048 + (3 x 2560) = 9728 MB resident.
+#
+# !! UNRESOLVED — this budget may not fit. The four guests already running on the
+# box are configured for 8048 + 16000 + 8048 + 18000 = 50,096 MB, against 24 GB
+# of physical RAM per docs/hardware.md. Either the CPU2 memory bank went in and
+# the box is bigger than the docs say, or PVE is running a ~2x overcommit on
+# ballooning. 9728 MB of mostly balloon-disabled Postgres nodes on top of that is
+# how you meet the OOM killer. Settle it before the first run:
+#   free -m; grep -c ^processor /proc/cpuinfo
+#   for i in 100 101 102 103; do qm config $i | grep -E '^(balloon|memory)'; done
+# `playbooks/autobase.yml` asserts on ansible_memfree_mb, so it will refuse the
+# run rather than overcommit silently — but it can only judge the moment it runs.
+#
 # balloon: 0 disables the balloon driver. Left off on the DB nodes on purpose —
 # reclaiming pages from under shared_buffers produces latency cliffs that look
 # like Postgres faults. The console can balloon freely.

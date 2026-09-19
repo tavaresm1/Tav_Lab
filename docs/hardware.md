@@ -5,7 +5,10 @@ See also: [../ansible/host_vars/tav-serv.yml](../ansible/host_vars/tav-serv.yml)
 
 ## OS
 
-- **Proxmox VE 9** (Debian 13 trixie base)
+- **Proxmox VE 9.2.2**, kernel `7.0.2-6-pve` (Debian 13 trixie base) — `pveversion`, 2026-09-18
+- **Hostname / PVE node name: `pve`.** "tav-serv" is what we call the machine and
+  the alias the Ansible inventory uses; the node itself is `pve`. `pve_node` in
+  `group_vars/autobase.yml` must say `pve`.
 - Previously Linux Mint 22.3 + VirtualBox; that era's software inventory is kept
   at [context/tav-serv-inventory.md](context/tav-serv-inventory.md) as history
 - Administered as `root`; Ansible connects with the `ansible_control` key
@@ -36,26 +39,56 @@ See also: [../ansible/host_vars/tav-serv.yml](../ansible/host_vars/tav-serv.yml)
 - 24 GB in CPU1 bank (6× 4 GB Kingston `9965433-034.A00LF`, DDR3-1333 ECC RDIMM 1Rx4)
 - CPU2 bank empty — 8× Hynix `HMT351R7BFR4C-H9` (4GB 1Rx4 PC3-10600R) ordered
 
+> **Unverified against reality.** `qm list` on 2026-09-18 shows four *running*
+> guests configured for 50,096 MB total (8048 + 16000 + 8048 + 18000). That is
+> impossible on 24 GB unless the CPU2 bank went in without being recorded here, or
+> PVE is running a ~2× ballooning overcommit. Settle it with `free -m` and
+> `qm config <vmid> | grep -E '^(balloon|memory)'` before sizing anything new —
+> the Autobase guests want another 9728 MB and three of them deliberately disable
+> ballooning.
+
 ## Storage
 
+> **This section is stale and the discrepancy is large.** `pvesm status` on
+> 2026-09-18 reports ~9.3 TB across four stores, which two 1 TB drives cannot
+> physically provide. Drives were clearly added at or after the Proxmox rebuild
+> and never recorded here. Re-audit with `lsblk -o NAME,SIZE,MODEL,SERIAL`,
+> `zpool status`, and `perccli /c0 show` (or `megacli -PDList -a0`).
+
+Observed 2026-09-18:
+
+| Store | Type | Total | Free | Notes |
+|---|---|---|---|---|
+| `local-lvm` | lvmthin | 976 GB | 844 GB | Default guest store. `pve_storage` points here. |
+| `local` | dir | 94 GB | 64 GB | ISOs, templates, the cloud image cache |
+| `Big_Data1` | zfspool | 4.8 TB | 1.8 TB | 64% used — not this repo's |
+| `Big_Data2` | zfspool | 3.6 TB | 3.6 TB | Empty |
+
 - PERC H700 hardware RAID controller
-- **Current:** RAID 0 across 2× Seagate `ST91000640NS` (1 TB 2.5" SAS 7200 rpm)
-  - Deliberate no-redundancy scratch config
-  - SMART clean: Reallocated=1 baseline, no pending/uncorrectable, ~6100 PoH, temps 34-35°C
+- **Previously (2026-07-05):** RAID 0 across 2× Seagate `ST91000640NS`
+  (1 TB 2.5" SAS 7200 rpm), a deliberate no-redundancy scratch config.
+  SMART clean at the time: Reallocated=1 baseline, no pending/uncorrectable,
+  ~6100 PoH, temps 34-35°C. Which of the stores above this backs is unknown;
+  the two ZFS pools are certainly not on it.
 - **Pending:** 3× Intel `SSDSC2BX800G4R` (S3610 800 GB, Dell firmware, DWPD 3)
   - Offer submitted @ $85/3, contingent on SMART reports
 
 ## Networking
 
-- 4× Broadcom BCM5709 gigabit (`eno1`-`eno4`); one in use, enslaved to PVE's
-  `vmbr0` bridge — confirm which with `ip -br addr` and
-  `/etc/network/interfaces`, and set `pve_bridge` in `group_vars/autobase.yml`
-  to match
-- LAN `192.168.1.0/24`; tav-serv itself is `192.168.1.226`. iDRAC address
-  unconfirmed — see the Chassis section.
-- MagicDNS name `tav-serv`; tav-serv is the tailnet subnet router for the LAN.
-  Its tailnet IP changed when the node was re-registered during the rebuild —
-  read it from `tailscale status`, don't rely on a written-down value.
+Confirmed 2026-09-18 with `ip -br addr` and `ip route show default`:
+
+- 4× Broadcom BCM5709 gigabit, named **`nic0`-`nic3`**, not the `eno1`-`eno4`
+  the earlier audit recorded. Only `nic1` is UP, enslaved to PVE's `vmbr0`.
+  (Non-default names mean a `systemd.link` file or a kernel `net.ifnames`
+  setting is in play — worth knowing before touching `/etc/network/interfaces`.)
+- `vmbr0` holds `192.168.1.226/24`; default route via `192.168.1.1`.
+  `pve_bridge: vmbr0` in `group_vars/autobase.yml` matches.
+- Whether `.226` is static in `/etc/network/interfaces` or a DHCP lease is
+  **unconfirmed**, and it matters: the inventory reaches the box by that address.
+- iDRAC address unconfirmed — see the Chassis section.
+- `tailscale0` is up at `100.111.136.81`. **MagicDNS name is `pve`, not
+  `tav-serv`** — the node is named after the hostname. Prefer the LAN address or
+  `pve`; a tailnet IP written down anywhere is a bug waiting to happen.
 
 ## Virtualization capabilities
 

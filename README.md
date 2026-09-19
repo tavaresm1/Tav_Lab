@@ -33,10 +33,26 @@ PVE owns its own storage, networking, firewall and cluster configuration. This
 repo deliberately does not touch those: second-guessing the hypervisor from
 Ansible is how you lose a hypervisor.
 
-Existing guests that predate this repo — **TrueNAS SCALE (VM 100)** and the
-**Minecraft/BlueMap server** — are not managed here. `roles/proxmox_guests`
-asserts that any VMID it is about to touch carries the name it expects, so a
-collision stops the run instead of resizing someone else's disk.
+Guests that predate this repo are **not** managed here. As of 2026-09-18 `qm list`
+reports five:
+
+| VMID | Name | Mem (MB) | Disk | State |
+|---|---|---|---|---|
+| 100 | `NAS` (TrueNAS SCALE) | 8048 | 32 GB | running |
+| 101 | `Kieran-Craft` (Minecraft + BlueMap) | 16000 | 100 GB | running |
+| 102 | `Tav-Assistant` | 8048 | 32 GB | running |
+| 103 | `Hermes` | 18000 | 100 GB | running |
+| 104 | `KCraft-b` | 8048 | 100 GB | stopped |
+
+The Autobase platform uses 8000-8003 and 8010, so there is no VMID overlap.
+`roles/proxmox_guests` still asserts that any VMID it is about to touch carries
+the name it expects, so a collision stops the run instead of resizing someone
+else's disk.
+
+**Those four running guests are configured for 50 GB of RAM on a box documented
+as having 24 GB.** Either the memory upgrade landed unrecorded or PVE is
+overcommitting hard via ballooning. Resolve that before adding the platform's
+9728 MB — see the note in `group_vars/autobase.yml`.
 
 ---
 
@@ -209,9 +225,8 @@ likely reason to do this.
 ## What is NOT tracked here
 
 - **PVE's own configuration** — storage, bridges, cluster, firewall. PVE owns it.
-- **Pre-existing guests** — TrueNAS SCALE (VM 100) and the Minecraft server.
-  TrueNAS especially: it's an appliance, hand-installed packages don't survive
-  its upgrades.
+- **Pre-existing guests** — VMIDs 100-104, tabled above. TrueNAS especially:
+  it's an appliance, hand-installed packages don't survive its upgrades.
 - **PostgreSQL cluster internals** — Autobase's job, via the Console or the
   `vitabaks.autobase` collection.
 - **iDRAC config beyond a password reset** — hardware BMC has its own lifecycle.
