@@ -54,13 +54,26 @@ autobase_subnet_prefix: 24
 # CONFIRMED 2026-09-18: `ip route show default` → default via 192.168.1.1 dev vmbr0
 autobase_gateway: 192.168.1.1
 
-# STILL UNCONFIRMED — inferred from the gateway, which is the usual case for a
-# consumer router but not guaranteed. Check on the box:
-#   resolvectl status || cat /etc/resolv.conf
+# Checked 2026-09-19 — and the obvious check does NOT answer this. The host has no
+# resolvectl (PVE/Debian here does not run systemd-resolved), and
+# /etc/resolv.conf is owned by Tailscale:
+#
+#   nameserver 100.100.100.100                    <- MagicDNS, not the LAN resolver
+#   search taild4e3f5.ts.net mynetworksettings.com
+#
+# So the host's own resolver is useless as a model for the guests: the guests are
+# not on the tailnet (only the console VM joins it) and must not be pointed at
+# 100.100.100.100.
+#
+# What that file does establish is the SEARCH DOMAIN. Tailscale prepends the
+# tailnet domain and keeps whatever it found, so `mynetworksettings.com` is the
+# LAN's own domain — a Verizon Fios router. It was `lan` here, which was a guess
+# and wrong. To see the pre-Tailscale resolver directly:
+#   cat /etc/resolv.pre-tailscale-backup.conf
 autobase_nameservers:
   - 192.168.1.1
 autobase_searchdomains:
-  - lan
+  - mynetworksettings.com
 
 # The single client entry point, owned by vip-manager and moved on failover.
 # MUST be currently unused and outside the DHCP pool — Autobase validates this
