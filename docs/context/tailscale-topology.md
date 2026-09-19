@@ -36,6 +36,15 @@ which is what it requires.
   Set in `ansible/inventory/group_vars/all.yml` under `tailscale_up_flags`. The route needs
   **one-time approval in the Tailscale admin console** after first apply — that
   step cannot be automated from the node.
+
+  > **None of these flags were actually set until 2026-09-19.** `tailscale debug
+  > prefs` on the first real `proxmox_host` apply reported an empty
+  > `AdvertiseRoutes`, `RouteAll: false` and `RunSSH: false`. tav-serv was on the
+  > tailnet but was never a subnet router — this document described the intent, and
+  > nothing had applied it. It went unnoticed because `ansible.builtin.command` is
+  > skipped under `--check`, so dry runs said nothing about Tailscale at all; the
+  > role now prints current prefs next to the desired flags for exactly this reason.
+  > If off-LAN access to the lab ever seemed not to work, this was why.
 - **Any tailnet peer → the Autobase Console:** `https://autobase`. The console VM
   overrides `tailscale_up_flags` in `inventory/group_vars/autobase_console.yml` — a guest
   has no business advertising the LAN subnet — and `tailscale serve --bg
