@@ -74,5 +74,38 @@ else
     git -C "${REPO_DIR}" pull --quiet --ff-only || true
 fi
 
+# --- Vault ------------------------------------------------------------------
+#
+# Must run AFTER the clone/pull: the destination directory only exists once the
+# repo is there, and this file is deliberately not in the repo.
+#
+# control-node/vault/ is bind-mounted read-only at ${VAULT_SRC}. The vault file
+# is gitignored because Tav_Lab is public, which means the container's clone
+# never contains it — copying it into inventory/group_vars/ is what makes
+# Ansible auto-load it. Copy rather than mount straight into the repo path:
+# the repo lives in a named volume, and nesting a bind mount inside it is a
+# subtlety that breaks quietly when the volume is recreated.
+#
+# The file stays encrypted; playbook runs still need --ask-vault-pass.
+VAULT_SRC=/home/ansible/vault
+VAULT_DST="${REPO_DIR}/ansible/inventory/group_vars"
+
+shopt -s nullglob
+vault_files=("${VAULT_SRC}"/*.vault.yml)
+shopt -u nullglob
+
+if [[ ${#vault_files[@]} -gt 0 ]]; then
+    for v in "${vault_files[@]}"; do
+        install -m 600 "${v}" "${VAULT_DST}/$(basename "${v}")"
+        echo "[entrypoint] vault: installed $(basename "${v}")"
+    done
+else
+    echo "[entrypoint] WARNING: no vault file found in control-node/vault/" >&2
+    echo "[entrypoint]   Expected control-node/vault/all.vault.yml on the host." >&2
+    echo "[entrypoint]   playbooks/autobase.yml will fail its preflight assert on" >&2
+    echo "[entrypoint]   vault_proxmox_api_token_secret until it is there." >&2
+    echo "[entrypoint]   See control-node/README.md step 2b." >&2
+fi
+
 cd "${REPO_DIR}/ansible"
 exec "$@"

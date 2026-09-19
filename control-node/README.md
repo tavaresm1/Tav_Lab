@@ -91,6 +91,47 @@ Paste the contents of `ssh_keys/autobase.pub` into `autobase_ssh_pubkey` in
 guests, and the same one you hand the Autobase Console when you create a
 cluster. See [../docs/autobase.md](../docs/autobase.md).
 
+### Step 2b — create the vault
+
+**This is not optional, and it is not interchangeable with creating the vault in
+your local checkout.** The container clones `Tav_Lab` from GitHub (see
+`entrypoint.sh`), and `all.vault.yml` is gitignored because the repo is public —
+so a vault file sitting in `ansible/inventory/group_vars/` on the workstation is
+invisible inside the container. It has to go in `control-node/vault/`, which is
+bind-mounted; the entrypoint copies it into the cloned repo on every start.
+
+```bash
+mkdir -p vault && chmod 700 vault
+cat > vault/plain.yml <<'EOF'
+vault_proxmox_api_token_secret: "<pveum user token add output>"
+vault_autobase_auth_token: "<long random string — your Console login>"
+vault_tailscale_authkey: "<tailscale admin console → Settings → Keys>"
+EOF
+
+# Prompts for a NEW vault password — remember it, every run needs it
+docker-compose run --rm --entrypoint ansible-vault ansible \
+    encrypt /home/ansible/vault/plain.yml --output /home/ansible/vault/all.vault.yml
+
+rm -f vault/plain.yml        # do not skip this
+```
+
+The mount is read-write precisely so this works in place. To change a secret
+later:
+
+```bash
+docker-compose run --rm --entrypoint ansible-vault ansible \
+    edit /home/ansible/vault/all.vault.yml
+```
+
+| Variable | Used by | Required |
+|---|---|---|
+| `vault_proxmox_api_token_secret` | `roles/proxmox_guests` → PVE API | yes — preflight asserts it |
+| `vault_autobase_auth_token` | Console `.env`; this is the UI login | yes — preflight asserts it |
+| `vault_tailscale_authkey` | `roles/tailscale` on the console VM | only for `https://autobase` |
+
+`control-node/vault/` is gitignored as a whole directory, so the plaintext
+staging file above cannot be committed even if you forget to delete it.
+
 ### Step 3 — install the control pubkey on tav-serv
 
 Get `ssh_keys/ansible_control.pub` appended to `/root/.ssh/authorized_keys` on

@@ -55,6 +55,24 @@ services:
       # autobase.pub goes in autobase_ssh_pubkey in group_vars/autobase.yml.
       - ./ssh_keys:/home/ansible/ssh_keys:ro
 
+      # The ansible-vault file, by the same directory-mount logic as the keys
+      # above. This mount is not optional plumbing — it is the ONLY way the vault
+      # reaches the container. The repo below is cloned from GitHub, and
+      # all.vault.yml is gitignored (the repo is public), so a vault file created
+      # on the workstation is invisible in here without this. The symptom is the
+      # preflight assert in playbooks/autobase.yml failing on
+      # vault_proxmox_api_token_secret while the file plainly exists on the host.
+      #
+      # The entrypoint copies *.vault.yml out of here into the cloned repo's
+      # inventory/group_vars/ so Ansible auto-loads it. Still encrypted on disk;
+      # runs still need --ask-vault-pass.
+      #
+      # Read-WRITE, unlike ssh_keys above, and deliberately: `ansible-vault
+      # create` and `ansible-vault edit` both write in place, and rotating the PVE
+      # token or the Console auth token is a routine operation. Nothing in this
+      # repo targets this path, so rw costs nothing.
+      - ./vault:/home/ansible/vault
+
       # Persist the cloned repo between runs (optional — otherwise it re-clones)
       - repo_cache:/home/ansible/Tav_Lab
 

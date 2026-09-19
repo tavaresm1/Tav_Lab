@@ -25,6 +25,11 @@ ansible/*.retry
 
 # Control-node SSH keys — generated per-host, must never be committed
 control-node/ssh_keys/
+
+# Control-node vault mount — the whole directory, not just *.vault.yml, so a
+# plaintext file staged there on the way to `ansible-vault encrypt` can never be
+# committed by accident.
+control-node/vault/
 *.pem
 id_ed25519
 id_ed25519.pub
