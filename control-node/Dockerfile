@@ -3,7 +3,7 @@
 #
 # Build context is the REPO ROOT (see docker-compose.yml) so that
 # ansible/requirements.yml can be baked in:
-#   docker compose build
+#   docker-compose build
 FROM alpine:3.20
 
 RUN apk add --no-cache \

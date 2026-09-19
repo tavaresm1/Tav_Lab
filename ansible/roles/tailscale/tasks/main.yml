@@ -38,11 +38,18 @@
 # We only run `tailscale up` if the node is NOT already logged in.
 # Re-running it with different flags is legal but noisy — prefer `tailscale set`
 # for flag drift, which we do below.
+#
+# check_mode: false because this is a read-only query and the two tasks below
+# branch on its output. Without it, `--check` skips this task, ts_status.stdout is
+# undefined, and BOTH the login and the flag-drift task skip too — so a dry run
+# reports nothing to do for Tailscale whether or not the flags actually drifted.
+# That is worse than useless: it hid the pending --advertise-routes change.
 - name: Detect tailscale login state
   ansible.builtin.command: tailscale status --json
   register: ts_status
   changed_when: false
   failed_when: false
+  check_mode: false
   when: tailscale_enabled | default(true)
   tags: [tailscale]
 

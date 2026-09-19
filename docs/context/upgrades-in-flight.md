@@ -9,7 +9,12 @@ the `x86-64-v2` microarchitecture level. Adding a second one doesn't change that
 It is why the guests run Ubuntu rather than a RHEL 10 rebuild — see
 `design-decisions.md`.
 
-## Second CPU
+## Second CPU — DONE (discovered 2026-09-19)
+
+**This is already installed.** The `proxmox_host` baseline reported 24 vCPU, and a
+single 6c/12t X5670 cannot produce that. The section below is kept as the
+post-install checklist — run it to confirm the pair is healthy, since it was
+apparently installed without anyone recording it here.
 
 - **Part:** Intel Xeon **X5670** (SLBV7), used from eBay
 - **Purpose:** Populate empty socket 2 for a full 2× X5670 config
@@ -44,18 +49,20 @@ even available.
 Target is **96 GB**. Two ways to get there on an R610, which has 18 slots, 9 per
 socket, 3 channels per socket:
 
-| Route | Config | Speed | Needs CPU2? |
+| Route | Config | Speed | Notes |
 |---|---|---|---|
-| 16 GB RDIMMs | 6× 16 GB in bank A (2 DIMMs per channel) | 1066 MT/s | No |
-| 8 GB RDIMMs | 12× 8 GB across both banks (2 DPC) | 1066 MT/s | **Yes** |
+| 8 GB RDIMMs | 12× 8 GB, 6 per bank (2 DIMMs per channel) | 1066 MT/s | **Preferred** — 8 GB DDR3 RDIMMs are the cheap, plentiful size |
+| 16 GB RDIMMs | 6× 16 GB, 3 per bank (1 DPC) | 1333 MT/s | Full speed, fewer sticks, leaves 12 slots free for later |
 
-Either way you drop from 1333 to 1066 MT/s by going to 2 DIMMs per channel. Avoid
-3 DPC — it forces 800 MT/s. Populate a bank's slots in multiples of three to keep
-triple-channel; populating in pairs costs ~15% memory bandwidth.
+**Both banks are live** — the second X5670 is already installed (24 threads
+reported by the baseline on 2026-09-19; see `../hardware.md`), so socket 2's memory
+controller is up and its 9 slots work. Both routes above are available.
 
-**With only one CPU installed, bank B is dead silicon** — its 9 slots are wired to
-socket 2's memory controller. So the 8 GB route is gated on the second X5670 above,
-and the 16 GB route is the one that works today.
+Going to 2 DIMMs per channel drops 1333 → 1066 MT/s; 3 DPC forces 800 MT/s, so
+avoid it. Populate each bank in multiples of three to keep triple-channel;
+populating in pairs costs ~15% memory bandwidth. The 16 GB route is the only one
+that keeps 1333 MT/s, which is worth the price premium on a box whose workload is
+Postgres.
 
 Once 96 GB is in: the Autobase platform's 9728 MB stops being tight (see
 `../hardware.md#memory` for the current 34,928-of-40,188 arithmetic), the trimmed
@@ -89,10 +96,12 @@ sudo dmidecode -t memory \
 Every populated slot: `4 GB / 1333 MT/s / Rank 1`. Anything at 1066 MT/s
 or wrong rank indicates a bad DIMM or channel population issue.
 
-These 4 GB sticks were bought to take the box 24 GB → 48 GB, which is superseded
-by the 96 GB plan above: filling bank B with 4 GB DIMMs consumes all six slots for
-+24 GB and blocks the 8 GB/12-stick route. If 96 GB is the goal, keep these as
-spares for bank A rather than installing them, and decide the DIMM size first.
+These 4 GB sticks were bought to take the box 24 GB → 48 GB. That plan is
+superseded: the box is already at 40 GB and the target is 96 GB. Since both sockets
+turned out to be populated, some of this lot may already be installed — which would
+explain the 40 GB. Installing the rest buys +4 GB per slot and blocks both 96 GB
+routes above, so keep them as spares and run `dmidecode -t memory` before deciding
+anything.
 
 ## SSDs (three-drive replacement for current HDD pair)
 

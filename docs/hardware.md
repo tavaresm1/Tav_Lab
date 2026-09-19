@@ -26,8 +26,17 @@ See also: [../ansible/inventory/host_vars/tav-serv.yml](../ansible/inventory/hos
 
 ## CPU
 
-- Socket 1: 1× Intel Xeon **X5670** (6c/12t, Westmere-EP, LGA 1366, 95W)
-- Socket 2: **empty** — matching X5670 (SLBV7) ordered, heatsink PN GY611 pending
+- **Both sockets populated: 2× Intel Xeon X5670** (6c/12t each, Westmere-EP,
+  LGA 1366, 95W) = 12 cores / **24 threads**.
+- Confirmed indirectly 2026-09-19: the `proxmox_host` baseline reported
+  `24 vCPU`, and a single 6c/12t part cannot produce 24 logical CPUs. The
+  2026-07-05 audit recorded socket 2 as empty and
+  [context/upgrades-in-flight.md](context/upgrades-in-flight.md) listed the second
+  CPU as pending — both were stale. Verify the population directly with
+  `lscpu | grep 'Socket(s)'` (expect 2) and
+  `dmidecode -t processor | grep -i 'current speed'`.
+- **This means both memory banks are live**, which decides the route to 96 GB —
+  see upgrades-in-flight.md.
 - **Microarchitecture level: `x86-64-v2`.** Westmere-EP (2010) has SSE4.2 but no
   AVX, AVX2, BMI2 or FMA. This is a hard constraint on guest OS choice, not a
   tunable: anything requiring `x86-64-v3` (RHEL 10 and its rebuilds, including
@@ -43,8 +52,11 @@ for a triple-channel Westmere box (10× 4 GB), so the channel layout may be
 suboptimal — worth checking before buying more.
 
 - Was: 24 GB in CPU1 bank (6× 4 GB Kingston `9965433-034.A00LF`, DDR3-1333 ECC RDIMM 1Rx4)
-- CPU2 bank status now unknown — 8× Hynix `HMT351R7BFR4C-H9` (4GB 1Rx4 PC3-10600R)
-  were ordered; some or all may already be installed
+- The CPU2 bank is **live** (both sockets are populated — see CPU above), so the
+  40 GB is spread across both banks in some unrecorded mix. The 8× Hynix
+  `HMT351R7BFR4C-H9` (4 GB 1Rx4 PC3-10600R) that were ordered may be part of it.
+  40 GB is not a multiple of 6, so the population is certainly not uniform
+  triple-channel — another reason to run `dmidecode -t memory` before buying.
 
 Guest memory was trimmed on 2026-09-18 to make room for the Autobase platform.
 Configured totals after the trim:

@@ -94,9 +94,10 @@ autobase_cluster_vip: 192.168.1.40
 # A 96 GB upgrade is planned (stated 2026-09-18). Once it's in, all of this
 # arithmetic stops mattering: 34,928 MB committed against 96 GB is comfortable,
 # the 8 GB ARC cap becomes reasonable rather than greedy, and the trimmed guests
-# can be given their memory back. Re-measure and simplify this block then —
-# and note that a single X5670 only lights 9 of the 18 DIMM slots, so check
-# docs/context/upgrades-in-flight.md for whether 96 GB needs the second CPU too.
+# can be given their memory back. Re-measure and simplify this block then.
+# Both sockets turned out to be populated (24 vCPU reported 2026-09-19), so both
+# DIMM banks are live and either route to 96 GB works —
+# docs/context/upgrades-in-flight.md has them.
 #
 # What absorbs an overshoot: none of the pre-existing guests set a `balloon` key
 # (verified 2026-09-18), so PVE can reclaim from all five under pressure, while

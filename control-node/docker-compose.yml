@@ -8,9 +8,9 @@
 # Tailscale connection via network_mode: host):
 #
 #   cd control-node
-#   docker compose build
-#   docker compose run --rm ansible ansible -i inventory/hosts.ini all -m ping
-#   docker compose run --rm ansible ansible-playbook playbooks/autobase.yml --ask-vault-pass
+#   docker-compose build
+#   docker-compose run --rm ansible ansible -i inventory/hosts.ini all -m ping
+#   docker-compose run --rm ansible ansible-playbook playbooks/autobase.yml --ask-vault-pass
 #
 # Build context is the repo root so the image can bake in ansible/requirements.yml.
 #

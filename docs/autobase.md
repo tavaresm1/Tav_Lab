@@ -118,9 +118,9 @@ off the tailnet cannot resolve `tav-serv`):
 
 ```bash
 cd control-node
-docker compose build          # context is the repo root; bakes in requirements.yml
-docker compose run --rm ansible ansible -i inventory/hosts.ini proxmox -m ping
-docker compose run --rm ansible ansible-playbook playbooks/autobase.yml --ask-vault-pass
+docker-compose build          # context is the repo root; bakes in requirements.yml
+docker-compose run --rm ansible ansible -i inventory/hosts.ini proxmox -m ping
+docker-compose run --rm ansible ansible-playbook playbooks/autobase.yml --ask-vault-pass
 ```
 
 Or directly on `tav-serv`, if you'd rather not involve the container.

@@ -110,15 +110,15 @@ Full bootstrap (keys, image build, first ping) is in
 cd control-node
 
 # Host baseline, dry-run then apply
-docker compose run --rm ansible ansible-playbook playbooks/proxmox-host.yml --check --diff
-docker compose run --rm ansible ansible-playbook playbooks/proxmox-host.yml
+docker-compose run --rm ansible ansible-playbook playbooks/proxmox-host.yml --check --diff
+docker-compose run --rm ansible ansible-playbook playbooks/proxmox-host.yml
 
 # The Postgres platform — read docs/autobase.md §1 first, it will refuse to run
 # until the discovery values are confirmed
-docker compose run --rm ansible ansible-playbook playbooks/autobase.yml --ask-vault-pass
+docker-compose run --rm ansible ansible-playbook playbooks/autobase.yml --ask-vault-pass
 
 # Everything
-docker compose run --rm ansible ansible-playbook site.yml --ask-vault-pass
+docker-compose run --rm ansible ansible-playbook site.yml --ask-vault-pass
 ```
 
 Tags: `proxmox_host`, `sysctl`, `smart`, `tailscale`, `tailscale-repo`, `net`,

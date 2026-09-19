@@ -67,7 +67,7 @@ Two different trust paths, two keys, so either can be revoked alone:
 The container bind-mounts the whole `ssh_keys/` directory read-only and copies
 what it finds into `~/.ssh` at mode `600` on every start.
 
-**Do this before the first `docker compose run`.** Compose silently creates an
+**Do this before the first `docker-compose run`.** Compose silently creates an
 empty directory at any bind-mount source that doesn't exist, so running out of
 order leaves you with an empty `ssh_keys/` and a warning from the entrypoint
 rather than working SSH.
@@ -115,7 +115,7 @@ prints the real one — see [../docs/hardware.md](../docs/hardware.md).
 ### Step 4 — build the image
 
 ```bash
-docker compose build
+docker-compose build
 ```
 
 Produces `tav_lab_ansible:latest`. The build context is the repo root so the
@@ -126,7 +126,7 @@ per-run.
 ### Step 5 — sanity check
 
 ```bash
-docker compose run --rm ansible \
+docker-compose run --rm ansible \
     ssh -o StrictHostKeyChecking=accept-new root@tav-serv hostname
 ```
 
@@ -135,7 +135,7 @@ Expected output: `tav-serv`
 Then the Ansible ping:
 
 ```bash
-docker compose run --rm ansible \
+docker-compose run --rm ansible \
     ansible -i inventory/hosts.ini proxmox -m ping
 ```
 
@@ -154,7 +154,7 @@ If either fails, jump to **Troubleshooting**.
 Host baseline first, dry-run:
 
 ```bash
-docker compose run --rm ansible \
+docker-compose run --rm ansible \
     ansible-playbook playbooks/proxmox-host.yml --check --diff
 ```
 
@@ -162,21 +162,21 @@ Then the platform. Read [../docs/autobase.md](../docs/autobase.md) §1 first —
 the playbook refuses to run until the Step 0 discovery values are confirmed:
 
 ```bash
-docker compose run --rm ansible \
+docker-compose run --rm ansible \
     ansible-playbook playbooks/autobase.yml --ask-vault-pass
 ```
 
 Everything at once (`site.yml` imports both):
 
 ```bash
-docker compose run --rm ansible \
+docker-compose run --rm ansible \
     ansible-playbook site.yml --ask-vault-pass
 ```
 
 Interactive shell inside the container:
 
 ```bash
-docker compose run --rm ansible bash
+docker-compose run --rm ansible bash
 ```
 
 ---
@@ -245,7 +245,7 @@ Tailscale must be installed on the Mac itself.
 
 **`ERROR! couldn't resolve module/action 'community.proxmox.proxmox_kvm'`**
 - The image predates `ansible/requirements.yml` gaining that collection.
-  `docker compose build --no-cache`.
+  `docker-compose build --no-cache`.
 
 **Container can't clone the repo (`fatal: unable to access ...`)**
 - Host has no internet, or `REPO_URL` is unreachable.
@@ -257,19 +257,19 @@ Tailscale must be installed on the Mac itself.
   `root:root` and seeds a new named volume from the image path's ownership, so a
   volume created by an image that lacked `/home/ansible/Tav_Lab` stays root-owned
   while the container runs as uid 1000.
-- Fix: `docker compose build && docker volume rm control-node_repo_cache`. The
+- Fix: `docker-compose build && docker volume rm control-node_repo_cache`. The
   image now pre-creates the mountpoints owned by `ansible`.
 
 **`chmod: /home/ansible/.ssh/id_ed25519: Read-only file system`**
 - Stale image. Keys used to be bind-mounted individually onto `~/.ssh`, where
   their mode came from the host and couldn't be corrected. The entrypoint now
-  copies them out of the read-only mount instead. `docker compose build`.
+  copies them out of the read-only mount instead. `docker-compose build`.
 
 **`[FATAL tini (7)] exec /usr/local/bin/entrypoint.sh failed: Permission denied`**
 - `entrypoint.sh` lost its exec bit. `COPY` preserves the source mode, and
   `core.fileMode=false` on a Windows checkout hides it from `git status`.
 - Fixed in the image (`RUN chmod 0755`) and in the index (mode `100755`), so this
-  only appears on a stale build: `git pull && docker compose build`.
+  only appears on a stale build: `git pull && docker-compose build`.
 
 **Line-ending errors on `entrypoint.sh`** (`bad interpreter: /usr/bin/env`)
 - Git converted LF → CRLF on Windows. `.gitattributes` pins shell scripts to LF,
@@ -303,11 +303,11 @@ docker volume rm control-node_repo_cache
 
 Rebuild after a Dockerfile or requirements change:
 ```bash
-docker compose build --no-cache
+docker-compose build --no-cache
 ```
 
 Remove everything the control node created on this host:
 ```bash
-docker compose down -v
+docker-compose down -v
 docker image rm tav_lab_ansible:latest
 ```

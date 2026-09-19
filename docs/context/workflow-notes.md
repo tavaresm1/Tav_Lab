@@ -27,7 +27,7 @@ Working conventions for anyone (including future-you) picking up this repo.
 Use tags to scope apply narrowly:
 
 ```bash
-docker compose run --rm ansible \
+docker-compose run --rm ansible \
     ansible-playbook -i inventory/hosts.ini site.yml \
     --tags template,guests --check --diff
 ```
