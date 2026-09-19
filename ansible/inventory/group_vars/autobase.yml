@@ -15,7 +15,16 @@
 # ----------------------------------------------------------------------------
 
 # Set to true once you have verified every value in this block.
-autobase_preflight_confirmed: false
+#
+# Flipped true 2026-09-19. What that confirmation actually rests on, honestly:
+#   - pve_node / pve_api_host / pve_storage / pve_bridge: measured on the box
+#   - pve_api_user / pve_api_token_id: the token exists (`ansible@pve!automation`,
+#     created 2026-09-19 with PVEVMAdmin on / and PVEDatastoreUser on /storage)
+#   - subnet / gateway: measured
+#   - the five static addresses: verified unused by scan, NOT by reading the
+#     router's DHCP pool — see the note above autobase_cluster_vip
+#   - autobase_nameservers: still inferred, not measured
+autobase_preflight_confirmed: true
 
 # --- Proxmox node (the R610 we call tav-serv) ---
 #
@@ -57,10 +66,20 @@ autobase_searchdomains:
 # MUST be currently unused and outside the DHCP pool — Autobase validates this
 # at deploy time and assigns it after the cluster is up.
 #
-# UNCONFIRMED: check your router's DHCP pool before trusting .30/.40-.43 below.
-# tav-serv sitting at .226 hints the pool may start low (a .100-.200 pool would
-# leave .30-.43 free, a .2-.254 pool would not). `nmap -sn 192.168.1.0/24` from
-# the LAN, or the router's lease table, settles it.
+# PARTIALLY CONFIRMED 2026-09-19. The subnet is 192.168.1.0/24; the DHCP POOL
+# RANGE within it was never established. So .30/.40/.41-.43 are verified "nothing
+# answers on them right now", which is not the same as "the router will never
+# lease them". The residual risk is a duplicate-address collision weeks from now,
+# when a new device gets a lease for .41 and a pgnode stops being reachable — a
+# failure that looks like a Patroni or network fault and is neither.
+#
+# Close it one of two ways, either is fine:
+#   - narrow the DHCP pool to start above .50 (router admin page), or
+#   - add static DHCP reservations for these five addresses
+#
+# The playbook's preflight pings the VIP on every run, so a collision that has
+# already happened will stop the run rather than corrupt anything. It cannot warn
+# about a lease the router has merely reserved the right to hand out.
 autobase_cluster_vip: 192.168.1.40
 
 # --- Guests ---
@@ -180,7 +199,7 @@ autobase_ci_user: ansible
 # Public half of the key the Console hands to Autobase. Injected by cloud-init.
 # Generate on the control node, then paste the .pub here:
 #   ssh-keygen -t ed25519 -f ./ssh_keys/autobase -C "autobase@tavares-lab"
-autobase_ssh_pubkey: "ssh-ed25519 AAAA_REPLACE_ME autobase@tavares-lab"
+autobase_ssh_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOOfUTADdatrmUFwooEQVg8aBZlGyUPm85vxsxcY+BJ7 autobase@tavares-lab"
 
 # ----------------------------------------------------------------------------
 # Autobase Console
