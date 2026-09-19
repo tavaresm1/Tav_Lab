@@ -5,14 +5,14 @@
 # hardware_packages, cleanup_packages, cockpit_extras, virtualization_*) for
 # tav-serv when it was a Linux Mint box. Those went with the roles that consumed
 # them; host utilities now live in roles/proxmox_host/defaults, guest packages in
-# group_vars/autobase_guests.yml. `git log` has the originals.
+# inventory/group_vars/autobase_guests.yml. `git log` has the originals.
 
 timezone: America/New_York
 locale: en_US.UTF-8
 
 # Docker. Only the Autobase console VM gets it — deliberately NOT the hypervisor,
 # where Docker's iptables and bridge management would fight PVE's. The console
-# overrides docker_users in group_vars/autobase_console.yml.
+# overrides docker_users in inventory/group_vars/autobase_console.yml.
 docker_enabled: true
 
 # Tailscale. These flags are written for tav-serv, which is the tailnet subnet

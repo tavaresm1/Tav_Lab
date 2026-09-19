@@ -1,6 +1,6 @@
 ---
 # Derived connection settings for every platform guest. Addressing itself lives
-# in autobase_guests in group_vars/autobase.yml — keeping ansible_host derived
+# in autobase_guests in inventory/group_vars/autobase.yml — keeping ansible_host derived
 # means an IP is written down exactly once.
 ansible_host: "{{ autobase_guests[inventory_hostname].ip }}"
 ansible_user: "{{ autobase_ci_user }}"

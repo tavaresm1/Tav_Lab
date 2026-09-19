@@ -11,7 +11,7 @@ Working conventions for anyone (including future-you) picking up this repo.
    **The exception, and it's deliberate:** PVE's own configuration — storage,
    bridges, cluster membership, its firewall — is managed in the PVE UI and *not*
    tracked here. Changing `/etc/pve` or `/etc/network/interfaces` by hand is the
-   correct move; it just means the values in `group_vars/autobase.yml`
+   correct move; it just means the values in `inventory/group_vars/autobase.yml`
    (`pve_storage`, `pve_bridge`, the subnet) need to follow.
 2. Edit the role, group_vars, or host_vars in the repo.
 3. Push to `origin/main` (or use a feature branch and PR-review yourself).
@@ -51,7 +51,7 @@ before applying.
 
 ## Secrets
 
-`ansible/group_vars/all.vault.yml` is the only place plaintext-sensitive
+`ansible/inventory/group_vars/all.vault.yml` is the only place plaintext-sensitive
 values should live, and it's encrypted. The vault password itself is
 **never** in the repo — either type it with `--ask-vault-pass` or store
 it at `~/.vault_pass` outside the repo and pass with `--vault-password-file`.

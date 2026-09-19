@@ -19,7 +19,7 @@ removed rather than made conditional: `base`, `monitoring`, `virtualization`,
 | `roles/virtualization` — libvirt + VirtualBox + the `haos` VM | PVE *is* the hypervisor. A second stack underneath it is redundant at best. |
 | `roles/monitoring` — Cockpit | PVE's own UI is on `:8006`. smartd survived, folded into `roles/proxmox_host`. |
 | `roles/user_env` — `tavaresm1` dotfiles and authorized_keys | PVE is administered as root; there is no interactive login user to furnish. |
-| `docker_stacks: dockhand` in `host_vars/tav-serv.yml` | Container workloads belong in a guest, not on the hypervisor. |
+| `docker_stacks: dockhand` in `inventory/host_vars/tav-serv.yml` | Container workloads belong in a guest, not on the hypervisor. |
 
 **Reasoning:** Keeping the old roles behind `when: ansible_distribution == ...`
 guards would have meant carrying two OS idioms forever for a single host, and
@@ -63,7 +63,7 @@ negligible on SSDs, and the box graduates from scratch to persistent.
 
 ## Ansible over Terraform for VMs
 
-**Choice:** VM declarations live in Ansible — `group_vars/autobase.yml` plus
+**Choice:** VM declarations live in Ansible — `inventory/group_vars/autobase.yml` plus
 `roles/proxmox_guests` — not in Terraform's `bpg/proxmox` provider.
 
 **Reasoning:** One host, one operator, VMs get created rarely. The overhead
@@ -147,7 +147,7 @@ into `roles/docker/templates/<stack>.compose.yml.j2` and reference those instead
 The Autobase Console already deviates, for a different reason — see below.
 
 **Note:** the original consumer of this was the `dockhand` stack in
-`host_vars/tav-serv.yml`, which went away with the Proxmox rebuild (containers
+`inventory/host_vars/tav-serv.yml`, which went away with the Proxmox rebuild (containers
 belong in a guest, not on the hypervisor). The convention stands and
 `roles/docker` still implements it; there is currently no host using it.
 
@@ -164,7 +164,7 @@ idempotent flag updates on an already-authenticated node.
 ## Autobase guests: Ansible + community.proxmox, not Terraform
 
 **Choice:** The four Ubuntu guests backing the Autobase platform are declared
-in `group_vars/autobase.yml` and built by `roles/proxmox_guests` using
+in `inventory/group_vars/autobase.yml` and built by `roles/proxmox_guests` using
 `community.proxmox.proxmox_kvm`, not Terraform's `bpg/proxmox` provider.
 
 **Reasoning:** Consistent with the "Ansible over Terraform for VMs" decision

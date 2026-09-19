@@ -87,7 +87,7 @@ ssh-keygen -t ed25519 -f ssh_keys\autobase        -N '""' -C "autobase@tavares-l
 ```
 
 Paste the contents of `ssh_keys/autobase.pub` into `autobase_ssh_pubkey` in
-`ansible/group_vars/autobase.yml`. That is the key cloud-init installs on the
+`ansible/inventory/group_vars/autobase.yml`. That is the key cloud-init installs on the
 guests, and the same one you hand the Autobase Console when you create a
 cluster. See [../docs/autobase.md](../docs/autobase.md).
 

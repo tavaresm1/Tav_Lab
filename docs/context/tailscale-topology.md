@@ -33,11 +33,11 @@ which is what it requires.
   ```
   tailscale up --ssh --advertise-routes=192.168.1.0/24 --accept-routes
   ```
-  Set in `ansible/group_vars/all.yml` under `tailscale_up_flags`. The route needs
+  Set in `ansible/inventory/group_vars/all.yml` under `tailscale_up_flags`. The route needs
   **one-time approval in the Tailscale admin console** after first apply — that
   step cannot be automated from the node.
 - **Any tailnet peer → the Autobase Console:** `https://autobase`. The console VM
-  overrides `tailscale_up_flags` in `group_vars/autobase_console.yml` — a guest
+  overrides `tailscale_up_flags` in `inventory/group_vars/autobase_console.yml` — a guest
   has no business advertising the LAN subnet — and `tailscale serve --bg
   --https=443` fronts its `:80` rather than exposing it.
 - **tav-serv, guests → the internet:** outbound only, for apt/Docker repos, the

@@ -13,7 +13,7 @@ guest_firewall_tcp_ports:
 guest_unattended_upgrades: true
 
 # --- Overrides for the shared roles --------------------------------------
-# group_vars/all.yml defines no docker_users at all, and its tailscale_up_flags
+# inventory/group_vars/all.yml defines no docker_users at all, and its tailscale_up_flags
 # are written for tav-serv:
 #
 #   tailscale_up_flags: [--ssh, --advertise-routes=192.168.1.0/24,
@@ -27,7 +27,7 @@ tailscale_up_flags:
   - --ssh
   - --hostname=autobase
 
-# Non-interactive join. Put the key in group_vars/all.vault.yml as
+# Non-interactive join. Put the key in inventory/group_vars/all.vault.yml as
 # vault_tailscale_authkey; roles/tailscale hides the task under no_log whenever
 # this is non-empty. Leave it empty to log in by hand instead.
 tailscale_authkey: "{{ vault_tailscale_authkey | default('') }}"

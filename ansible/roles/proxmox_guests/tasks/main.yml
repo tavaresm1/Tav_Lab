@@ -29,7 +29,7 @@
     fail_msg: >-
       VMID {{ item.value.vmid }} on {{ pve_node }} already belongs to
       '{{ pve_vm_names[item.value.vmid | string] | default('?') }}', not
-      '{{ item.key }}'. Pick a free ID in group_vars/autobase.yml — check
+      '{{ item.key }}'. Pick a free ID in inventory/group_vars/autobase.yml — check
       `qm list` and `pct list` (CT and VM IDs share one namespace).
   loop: "{{ autobase_guests | dict2items }}"
   loop_control:

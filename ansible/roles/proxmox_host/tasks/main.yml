@@ -48,9 +48,17 @@
     mode: "0644"
     content: |
       # Managed by Ansible. Do not edit by hand.
-      DEVICESCAN -d removable -n standby -m root -M exec /usr/share/smartmontools/smartd-runner
-      {% for id in smartd_megaraid_devices %}
-      /dev/sda -d megaraid,{{ id }} -a -o on -S on -s (S/../.././02|L/../../6/03) -m root
+      #
+      # Deliberately NO DEVICESCAN. smartd(8) treats DEVICESCAN as exclusive: when
+      # it is the first non-comment entry, every remaining entry in the file is
+      # ignored — so the previous version of this template silently monitored
+      # nothing behind the PERC, which is the only controller here that needs the
+      # explicit -d megaraid. Enumerating costs a var and actually works.
+      {% for id in smartd_megaraid_devices | default([]) %}
+      {{ smartd_megaraid_bus | default('/dev/sda') }} -d megaraid,{{ id }} -a -o on -S on -s (S/../.././02|L/../../6/03) -m root -M exec /usr/share/smartmontools/smartd-runner
+      {% endfor %}
+      {% for dev in smartd_scsi_devices | default([]) %}
+      {{ dev }} -d scsi -a -o on -S on -s (S/../.././03|L/../../6/04) -m root -M exec /usr/share/smartmontools/smartd-runner
       {% endfor %}
   when: smartd_enabled | default(true)
   notify: restart smartd
@@ -84,7 +92,7 @@
     fail_msg: >-
       pve_node is '{{ pve_node }}' but this host's hostname is
       '{{ ansible_hostname }}'. PVE names the node after the hostname, so
-      group_vars/autobase.yml must say `pve_node: {{ ansible_hostname }}`.
+      inventory/group_vars/autobase.yml must say `pve_node: {{ ansible_hostname }}`.
       Confirm with `pvesh get /nodes --output-format json`. Do not rename the
       PVE node to match the repo — fix the variable.
     success_msg: "pve_node '{{ pve_node }}' matches the node name."

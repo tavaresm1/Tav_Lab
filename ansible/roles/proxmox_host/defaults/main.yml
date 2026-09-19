@@ -29,9 +29,13 @@ proxmox_host_hardware_packages:
   - freeipmi-tools
   - lm-sensors
 
-# smartd cannot see through the PERC H700 without -d megaraid,<id>.
+# smartd cannot see through the PERC H700 without -d megaraid,<id>. Both lists
+# are empty here on purpose — a host declares its own disks in host_vars, and
+# `smartctl --scan` prints exactly the arguments to fill them with.
 smartd_enabled: true
 smartd_megaraid_devices: []
+smartd_megaraid_bus: /dev/sda
+smartd_scsi_devices: []
 
 # unattended-upgrades is deliberately absent. PVE upgrades move kernels and
 # qemu under running guests; they get done on purpose, with the guests in a

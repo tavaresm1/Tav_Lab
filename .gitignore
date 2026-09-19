@@ -18,6 +18,11 @@ ansible/*.retry
 .vault_pass.txt
 *.vault_pass
 
+# The vault itself. It is encrypted, so this is defence in depth rather than the
+# only thing standing between a secret and a public repo — but the README has
+# always claimed this file is ignored, and until now it wasn't.
+*.vault.yml
+
 # Control-node SSH keys — generated per-host, must never be committed
 control-node/ssh_keys/
 *.pem

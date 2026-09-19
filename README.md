@@ -49,10 +49,11 @@ The Autobase platform uses 8000-8003 and 8010, so there is no VMID overlap.
 the name it expects, so a collision stops the run instead of resizing someone
 else's disk.
 
-**Those four running guests are configured for 50 GB of RAM on a box documented
-as having 24 GB.** Either the memory upgrade landed unrecorded or PVE is
-overcommitting hard via ballooning. Resolve that before adding the platform's
-9728 MB — see the note in `group_vars/autobase.yml`.
+Those four running guests are configured for 50 GB of RAM. The box has **40 GB**
+(`free -m`, 2026-09-18 — not the 24 GB the docs claimed), so PVE is overcommitting
+via ballooning, and only **~9.2 GB is actually available**. The platform wants
+9728 MB with ballooning deliberately off on the DB nodes, which does not fit with
+anything to spare. See the sizing note in `inventory/group_vars/autobase.yml`.
 
 ---
 
@@ -62,15 +63,17 @@ overcommitting hard via ballooning. Resolve that before adding the platform's
 ansible/
   ansible.cfg                  Defaults (inventory, ssh args, become)
   requirements.yml             Pinned collections (incl. community.proxmox)
-  inventory/hosts.ini          Static inventory — tav-serv + the platform guests
-  group_vars/
-    all.yml                    Non-secret defaults for all hosts
-    all.vault.yml              (gitignored) ansible-vault secrets
-    autobase.yml               THE file to edit for the Postgres platform
-    autobase_guests.yml        Derived connection settings for the guests
-    autobase_console.yml       Console-VM overrides
-    pg_nodes.yml               DB-node overrides
-  host_vars/tav-serv.yml       Hardware profile, sysctl, smartd devices
+  inventory/
+    hosts.ini                  Static inventory — tav-serv + the platform guests
+    group_vars/                Beside the inventory, NOT beside site.yml — that
+      all.yml                  is what makes the vars load for playbooks/*.yml
+      all.vault.yml            (gitignored) ansible-vault secrets
+      autobase.yml             THE file to edit for the Postgres platform
+      autobase_guests.yml      Derived connection settings for the guests
+      autobase_console.yml     Console-VM overrides
+      pg_nodes.yml             DB-node overrides
+    host_vars/
+      tav-serv.yml             Hardware profile, sysctl, smartd devices
   site.yml                     Everything, in order
   playbooks/
     proxmox-host.yml           tav-serv baseline only
@@ -158,7 +161,7 @@ and the Autobase guests reachable from anywhere on the tailnet. The subnet route
 needs **one-time approval in the Tailscale admin console** after first apply —
 not automatable from the node.
 
-The Autobase Console overrides these flags (`group_vars/autobase_console.yml`): a
+The Autobase Console overrides these flags (`inventory/group_vars/autobase_console.yml`): a
 guest has no business advertising the LAN subnet, and it publishes its UI with
 `tailscale serve` instead of exposing `:80`.
 
@@ -169,7 +172,7 @@ Topology, MagicDNS caveats and the corporate-resolver failure mode:
 
 ## Secrets
 
-Everything sensitive lives in `ansible/group_vars/all.vault.yml`, encrypted with
+Everything sensitive lives in `ansible/inventory/group_vars/all.vault.yml`, encrypted with
 `ansible-vault` and gitignored. **This repo is public** — nothing secret goes in
 plaintext, ever.
 
@@ -180,8 +183,8 @@ plaintext, ever.
 | `vault_tailscale_authkey` | non-interactive `tailscale up` on the guests |
 
 ```bash
-ansible-vault create ansible/group_vars/all.vault.yml
-ansible-vault edit   ansible/group_vars/all.vault.yml
+ansible-vault create ansible/inventory/group_vars/all.vault.yml
+ansible-vault edit   ansible/inventory/group_vars/all.vault.yml
 ansible-playbook ... --ask-vault-pass    # or --vault-password-file ~/.vault_pass
 ```
 

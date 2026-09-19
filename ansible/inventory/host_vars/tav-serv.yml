@@ -1,0 +1,69 @@
+---
+# Host-specific overrides for tav-serv — the R610, now running Proxmox VE.
+#
+# The Mint-era content of this file (docker_stacks/dockhand, vbox_vms/haos, an
+# 8 GB swapfile) was retired with the Proxmox rebuild: VirtualBox is redundant
+# on a hypervisor, PVE manages its own swap on LVM, and container workloads now
+# live in guests rather than on the host. `git log -- ansible/inventory/host_vars/tav-serv.yml`
+# has the originals; the reasoning is in docs/context/design-decisions.md.
+
+# Hardware profile — see docs/hardware.md for the full inventory.
+host_role: hypervisor
+host_notes: |
+  Dell PowerEdge R610 (BIOS 6.4.0), Proxmox VE 9.2.2 (Debian 13 trixie)
+  PVE node name is `pve`; `tav-serv` is this inventory's alias for it
+  1× X5670 (2nd socket empty, upgrade pending)
+  40 GB RAM as measured 2026-09-18 — population unrecorded, was 24 GB
+  PERC H700 volume /dev/sda 1.1 TB across 4 members -> the PVE LVM install
+  16 SATA SSDs in two raidz1 pools (Big_Data1, Big_Data2) — not ours
+  Host IP 192.168.1.226 (static) on the lab LAN (192.168.1.0/24)
+  iDRAC6 — address UNCONFIRMED, see note below
+
+# The Mint-era audit recorded iDRAC at 192.168.0.120, but the LAN is 192.168.1.0/24
+# (tav-serv is 192.168.1.226), so that address cannot be right as written. Confirm
+# with `ipmitool lan print 1` on the host and correct host_notes above.
+
+# Westmere-EP: SSE4.2 and POPCNT, but no AVX at all. That puts the box at
+# x86-64-v2, which is why the Autobase guests run Ubuntu — RHEL 10 and its
+# rebuilds require x86-64-v3. See docs/context/design-decisions.md.
+host_cpu_baseline: x86-64-v2
+
+# sysctl knobs. ip_forward is what lets tav-serv act as the tailnet subnet
+# router for 192.168.1.0/24 (iDRAC, the PVE web UI, the Autobase guests).
+sysctl_settings:
+  net.ipv4.ip_forward: 1
+  net.ipv6.conf.all.forwarding: 1
+  vm.swappiness: 10
+
+# smartd watches the PERC-attached disks by megaraid device ID, not /dev/sdX.
+# FOUR members, not two: `smartctl --scan` on 2026-09-18 reports megaraid_disk_00
+# through _03 on /dev/bus/2. This said [0, 1] and would have left half the array
+# unmonitored.
+smartd_megaraid_devices: [0, 1, 2, 3]
+
+# The megaraid bus node smartctl reported. Traditionally /dev/sda also works for
+# this, but use what the scan actually said.
+smartd_megaraid_bus: /dev/bus/2
+
+# The 16 SATA SSDs behind the two ZFS pools. They answer plain `-d scsi`, so they
+# would be caught by DEVICESCAN — except DEVICESCAN cannot coexist with the
+# megaraid lines (see roles/proxmox_host/tasks/main.yml), so they are enumerated.
+# ZFS itself will notice a failed member; smartd is here for the early warning
+# (wearout, reallocations) that ZFS does not give you.
+smartd_scsi_devices:
+  - /dev/sdb    # Big_Data1 — Intel S3510 800 GB ×8
+  - /dev/sdc
+  - /dev/sdd
+  - /dev/sde
+  - /dev/sdf
+  - /dev/sdg
+  - /dev/sdh
+  - /dev/sdi
+  - /dev/sdj    # Big_Data2 — Intel S3500 600 GB ×8
+  - /dev/sdk
+  - /dev/sdl
+  - /dev/sdm
+  - /dev/sdn
+  - /dev/sdo
+  - /dev/sdp
+  - /dev/sdq

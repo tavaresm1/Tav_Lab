@@ -48,7 +48,7 @@ the DCS cannot.
 ## 1. Step 0 — discovery (do this first)
 
 Everything in the `FILL IN` block at the top of
-[`../ansible/group_vars/autobase.yml`](../ansible/group_vars/autobase.yml) starts
+[`../ansible/inventory/group_vars/autobase.yml`](../ansible/inventory/group_vars/autobase.yml) starts
 as a placeholder inferred from the documented lab LAN. The playbook refuses to run
 until you have confirmed them and flipped `autobase_preflight_confirmed: true`.
 
@@ -96,13 +96,13 @@ ssh-copy-id -i ./ssh_keys/ansible_control.pub root@tav-serv
 ```
 
 Paste `ssh_keys/autobase.pub` into `autobase_ssh_pubkey` in
-`group_vars/autobase.yml`. cloud-init installs it on every guest, and it is the
+`inventory/group_vars/autobase.yml`. cloud-init installs it on every guest, and it is the
 same key you hand the Console in step 5.
 
 **Secrets** into the vault (already gitignored, see the README):
 
 ```bash
-ansible-vault edit ansible/group_vars/all.vault.yml
+ansible-vault edit ansible/inventory/group_vars/all.vault.yml
 ```
 
 ```yaml

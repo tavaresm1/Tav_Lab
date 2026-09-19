@@ -85,6 +85,6 @@
   ansible.builtin.debug:
     msg: >-
       Console up. Tailnet: https://autobase (sign in with the AUTH_TOKEN from
-      group_vars/all.vault.yml). LAN fallback:
+      inventory/group_vars/all.vault.yml). LAN fallback:
       http://{{ autobase_guests[inventory_hostname].ip }}/
   tags: [console]

@@ -65,7 +65,7 @@ autobase_cluster_vip: 192.168.1.40
 
 # --- Guests ---
 # Single source of truth for VMIDs, sizing and addressing. Keys match
-# inventory_hostname in [autobase_guests]; group_vars/autobase_guests.yml
+# inventory_hostname in [autobase_guests]; inventory/group_vars/autobase_guests.yml
 # derives ansible_host from the `ip` field here.
 #
 # VMIDs CONFIRMED FREE 2026-09-18: `qm list` shows 100 (NAS), 101 (Kieran-Craft),
@@ -73,14 +73,28 @@ autobase_cluster_vip: 192.168.1.40
 #
 # RAM budget: 2048 + (3 x 2560) = 9728 MB resident.
 #
-# !! UNRESOLVED — this budget may not fit. The four guests already running on the
-# box are configured for 8048 + 16000 + 8048 + 18000 = 50,096 MB, against 24 GB
-# of physical RAM per docs/hardware.md. Either the CPU2 memory bank went in and
-# the box is bigger than the docs say, or PVE is running a ~2x overcommit on
-# ballooning. 9728 MB of mostly balloon-disabled Postgres nodes on top of that is
-# how you meet the OOM killer. Settle it before the first run:
-#   free -m; grep -c ^processor /proc/cpuinfo
-#   for i in 100 101 102 103; do qm config $i | grep -E '^(balloon|memory)'; done
+# !! IT DOES NOT CURRENTLY FIT. Measured 2026-09-18: the box has 40,188 MB (not
+# the 24 GB the docs claimed), of which 30,929 MB is used and only ~9,259 MB is
+# available. We want 9,728 MB, and three of the four guests disable ballooning,
+# so PVE cannot claw it back under pressure. That is an OOM waiting for the first
+# vacuum.
+#
+# The four running guests are configured for 50,096 MB against 40 GB physical, so
+# ballooning is already working hard. The other big consumer is the ZFS ARC for
+# Big_Data1/Big_Data2, which defaults to half of RAM (~20 GB). Capping it is the
+# cheapest several GB available, and costs nothing here: PVE guest disks live on
+# LVM (local-lvm), so only the two data pools use the ARC at all.
+#
+#   # on the host — 8 GB cap, survives reboot
+#   echo "options zfs zfs_arc_max=8589934592" > /etc/modprobe.d/zfs.conf
+#   update-initramfs -u -k all      # then reboot, or set it live:
+#   echo 8589934592 > /sys/module/zfs/parameters/zfs_arc_max
+#
+# Check the ARC's current size first — `arc_summary | head -20` or
+# `awk '/^size/ {print $3/1073741824" GB"}' /proc/spl/kstat/zfs/arcstats`.
+# If capping doesn't free enough, drop the pgnodes to 2048 MB (8192 MB total);
+# Patroni + etcd + PgBouncer + a 512 MB shared_buffers fits a lab cluster.
+#
 # `playbooks/autobase.yml` asserts on ansible_memfree_mb, so it will refuse the
 # run rather than overcommit silently — but it can only judge the moment it runs.
 #

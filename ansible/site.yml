@@ -3,7 +3,7 @@
 #
 #   ansible-playbook site.yml --ask-vault-pass
 #
-# The Autobase plays read secrets from group_vars/all.vault.yml, so a full run
+# The Autobase plays read secrets from inventory/group_vars/all.vault.yml, so a full run
 # needs the vault password. Slices:
 #   --tags proxmox_host   tav-serv baseline only (packages, sysctl, smartd)
 #   --tags tailscale      tailnet flags on the host

@@ -24,7 +24,7 @@
       ansible.builtin.assert:
         that: autobase_preflight_confirmed | bool
         fail_msg: >-
-          group_vars/autobase.yml still holds placeholder values. Work through
+          inventory/group_vars/autobase.yml still holds placeholder values. Work through
           docs/autobase.md §1, correct pve_node / pve_storage / pve_bridge, the
           subnet and every IP, then set autobase_preflight_confirmed: true.
 
@@ -34,7 +34,7 @@
         fail_msg: >-
           autobase_ssh_pubkey is still the placeholder. Generate the pair
           (ssh-keygen -t ed25519 -f ./ssh_keys/autobase) and paste the .pub
-          into group_vars/autobase.yml — cloud-init injects it, and it is the
+          into inventory/group_vars/autobase.yml — cloud-init injects it, and it is the
           key you hand the Console later.
 
     - name: Require the vault secrets
@@ -44,7 +44,7 @@
           - vault_autobase_auth_token | default('') | length > 0
         fail_msg: >-
           Missing secrets. Run:
-          ansible-vault edit group_vars/all.vault.yml
+          ansible-vault edit inventory/group_vars/all.vault.yml
           and set vault_proxmox_api_token_secret and vault_autobase_auth_token.
 
     - name: Confirm the requested storage exists on this node

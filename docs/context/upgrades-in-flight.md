@@ -58,7 +58,7 @@ Every populated slot: `4 GB / 1333 MT/s / Rank 1`. Anything at 1066 MT/s
 or wrong rank indicates a bad DIMM or channel population issue.
 
 Capacity goes 24 GB → 48 GB. The Autobase guest sizing in
-`group_vars/autobase.yml` (9728 MB resident across four VMs) was chosen against
+`inventory/group_vars/autobase.yml` (9728 MB resident across four VMs) was chosen against
 the current 24 GB with TrueNAS and the Minecraft guest already resident; there is
 room to raise `pgnode` memory afterwards if a cluster needs it.
 

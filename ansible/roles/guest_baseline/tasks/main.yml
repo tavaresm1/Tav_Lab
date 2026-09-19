@@ -77,7 +77,7 @@
   tags: [baseline]
 
 # -------- Optional host firewall --------
-# Off by default (see group_vars/autobase_guests.yml). SSH is allowed before the
+# Off by default (see inventory/group_vars/autobase_guests.yml). SSH is allowed before the
 # default-deny policy is applied, so enabling this cannot lock you out.
 - name: Configure ufw
   when: guest_firewall_enabled | default(false)
