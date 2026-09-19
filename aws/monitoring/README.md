@@ -426,8 +426,8 @@ from there — which is why this stack needs no `prometheus-pve-exporter`.
 ND_KEY=$(aws ssm get-parameter --name /monitoring/netdata-stream-key \
   --with-decryption --query Parameter.Value --output text)
 
-scp home-node/install-child.sh home-node/config.alloy root@pve:/tmp/
-ssh root@pve "cd /tmp && MON_HOST=mon-aws ND_KEY=$ND_KEY bash install-child.sh"
+scp home-node/install-child.sh home-node/config.alloy root@192.168.1.226:/tmp/
+ssh root@192.168.1.226 "cd /tmp && MON_HOST=mon-aws ND_KEY=$ND_KEY bash install-child.sh"
 ```
 
 The script installs Netdata as a child (`memory mode = ram`, local health disabled so
@@ -438,7 +438,7 @@ nothing.
 Verify within about a minute:
 
 ```bash
-ssh root@pve "systemctl status netdata alloy --no-pager | grep -E 'Active|●'"
+ssh root@192.168.1.226 "systemctl status netdata alloy --no-pager | grep -E 'Active|●'"
 ```
 
 Then check <http://mon-aws:19999> — `pve` should appear in the node list on the left.
