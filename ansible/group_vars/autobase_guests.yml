@@ -9,10 +9,10 @@ ansible_user: "{{ autobase_ci_user }}"
 # Path is inside the control-node container (see control-node/docker-compose.yml).
 ansible_ssh_private_key_file: "{{ autobase_ssh_private_key_file | default('~/.ssh/autobase') }}"
 
-# The guests are Ubuntu Server 24.04 cloud images. roles/base is not reused
-# against them — it is written for Mint on bare metal (swapfile sizing,
-# unattended-upgrades policy, Openbox cleanup, ipmitool/smartmontools).
-# roles/guest_baseline is the VM-appropriate equivalent.
+# The guests are Ubuntu Server 24.04 cloud images, baselined by
+# roles/guest_baseline. The hypervisor's own baseline (roles/proxmox_host) is not
+# reused here: it installs IPMI and SMART tooling for physical disks that a guest
+# cannot see, and its package list is Debian's.
 guest_packages:
   - qemu-guest-agent
   - chrony

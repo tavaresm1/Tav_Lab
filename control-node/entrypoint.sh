@@ -9,7 +9,7 @@ REPO_DIR="${REPO_DIR:-/home/ansible/Tav_Lab}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 
 # SSH keys are mounted read-only by docker-compose:
-#   id_ed25519 -> root@pve (the hypervisor)
+#   id_ed25519 -> root@tav-serv (the Proxmox host)
 #   autobase   -> ansible@ the Ubuntu guests
 # Fix permissions defensively; the chmod is a no-op on a read-only mount, in
 # which case the key must already be 600 on the host.

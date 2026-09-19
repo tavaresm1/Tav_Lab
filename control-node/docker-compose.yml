@@ -1,5 +1,9 @@
 # Ansible control node for the homelab.
 #
+# Runs on the tavares-lab workstation, not on tav-serv: Docker CE on a Proxmox
+# node fights PVE over iptables and bridge management, and the container's first
+# job is building the guests, so it cannot live inside one.
+#
 # Usage (from a host that is ON the tailnet — the container inherits the host's
 # Tailscale connection via network_mode: host):
 #
@@ -11,7 +15,7 @@
 # Build context is the repo root so the image can bake in ansible/requirements.yml.
 #
 # Two keys are mounted, for two different trust paths:
-#   ansible_control -> root@pve, the hypervisor (and formerly tav-serv)
+#   ansible_control -> root@tav-serv, the Proxmox host
 #   autobase        -> ansible@ the Ubuntu guests. cloud-init installs its public
 #                      half, and it is the key you paste into the Console when
 #                      creating a cluster. See docs/autobase.md.
@@ -27,20 +31,20 @@ services:
     image: tav_lab_ansible:latest
     container_name: tav_lab_ansible
     hostname: ansible
-    network_mode: host   # so we can reach pve and the guests over the tailnet
+    network_mode: host   # so we can reach tav-serv and the guests over the tailnet
     environment:
       REPO_URL: https://github.com/tavaresm1/Tav_Lab.git
       REPO_BRANCH: main
       ANSIBLE_HOST_KEY_CHECKING: "False"
     volumes:
       # Hypervisor key — generate once with:
-      #   ssh-keygen -t ed25519 -f ./ssh_keys/ansible_control -C "ansible-control@pve"
-      # then add the .pub to root@pve:~/.ssh/authorized_keys
+      #   ssh-keygen -t ed25519 -f ./ssh_keys/ansible_control -C "ansible-control@tavares-lab"
+      # then add the .pub to root@tav-serv:~/.ssh/authorized_keys
       - ./ssh_keys/ansible_control:/home/ansible/.ssh/id_ed25519:ro
       - ./ssh_keys/ansible_control.pub:/home/ansible/.ssh/id_ed25519.pub:ro
 
       # Guest key — generate once with:
-      #   ssh-keygen -t ed25519 -f ./ssh_keys/autobase -C "autobase@pve"
+      #   ssh-keygen -t ed25519 -f ./ssh_keys/autobase -C "autobase@tavares-lab"
       # then paste the .pub into autobase_ssh_pubkey in group_vars/autobase.yml
       - ./ssh_keys/autobase:/home/ansible/.ssh/autobase:ro
       - ./ssh_keys/autobase.pub:/home/ansible/.ssh/autobase.pub:ro

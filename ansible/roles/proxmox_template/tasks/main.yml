@@ -1,10 +1,10 @@
 ---
-# Builds the Ubuntu Server 24.04 LTS cloud-init template on pve, once.
+# Builds the Ubuntu Server 24.04 LTS cloud-init template on tav-serv, once.
 #
 # This role shells out to `qm` rather than using community.proxmox modules
 # because `qm importdisk` has no module equivalent — a qcow2 has to be imported
-# through the CLI on the node itself. Same precedent as roles/virtualization's
-# VBoxManage calls (see docs/context/design-decisions.md).
+# through the CLI on the node itself. Everything after the import is a clean API
+# call and lives in roles/proxmox_guests (see docs/context/design-decisions.md).
 #
 # The whole thing is guarded on `qm config <vmid>`, so a second run is a no-op.
 

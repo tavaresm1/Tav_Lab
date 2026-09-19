@@ -1,0 +1,38 @@
+---
+# Utilities for the hypervisor itself. Deliberately short: every package here
+# lands on the one host that must not break, so it earns its place by being
+# useful while something is going wrong.
+#
+# Debian trixie, not Ubuntu — `bottom` from the Mint-era base_packages is not
+# packaged for Debian and was dropped rather than pinned from a third-party repo.
+proxmox_host_packages:
+  - htop
+  - iotop
+  - iftop
+  - ncdu
+  - tmux
+  - lsof
+  - strace
+  - tree
+  - pv
+  - rsync
+  - jq
+  - unzip
+  - curl
+  - ca-certificates
+  - gnupg
+
+# R610-specific: SMART, IPMI/iDRAC and sensor tooling.
+proxmox_host_hardware_packages:
+  - smartmontools
+  - ipmitool
+  - freeipmi-tools
+  - lm-sensors
+
+# smartd cannot see through the PERC H700 without -d megaraid,<id>.
+smartd_enabled: true
+smartd_megaraid_devices: []
+
+# unattended-upgrades is deliberately absent. PVE upgrades move kernels and
+# qemu under running guests; they get done on purpose, with the guests in a
+# known state, not at 06:00 by apt.

@@ -1,26 +1,21 @@
 ---
-# Top-level playbook — applies every role in order.
-# Use tags to run slices:
-#   ansible-playbook site.yml --tags base
-#   ansible-playbook site.yml --tags docker,tailscale
+# Top-level playbook — the whole lab, in dependency order.
+#
+#   ansible-playbook site.yml --ask-vault-pass
+#
+# The Autobase plays read secrets from group_vars/all.vault.yml, so a full run
+# needs the vault password. Slices:
+#   --tags proxmox_host   tav-serv baseline only (packages, sysctl, smartd)
+#   --tags tailscale      tailnet flags on the host
+#   --tags template       the Ubuntu cloud-init template
+#   --tags guests         clone / resize / start the platform VMs
+#   --tags baseline       inside the guests
+#   --tags console        Docker + Tailscale + the Autobase Console stack
+#
+# This used to be a single play applying base/monitoring/docker/virtualization/
+# tailscale/user_env to tav-serv as a Mint box with VirtualBox guests. Those
+# roles were retired with the Proxmox rebuild — see
+# docs/context/design-decisions.md and `git log`.
 
-- name: Manage Tav-Serv
-  hosts: hypervisors
-  become: true
-  gather_facts: true
-
-  pre_tasks:
-    - name: Show target facts
-      ansible.builtin.debug:
-        msg: >-
-          Running on {{ ansible_hostname }} ({{ ansible_distribution }}
-          {{ ansible_distribution_version }} — kernel {{ ansible_kernel }})
-      tags: always
-
-  roles:
-    - { role: base,            tags: [base] }
-    - { role: monitoring,      tags: [monitoring] }
-    - { role: docker,          tags: [docker] }
-    - { role: virtualization,  tags: [virtualization, vms] }
-    - { role: tailscale,       tags: [tailscale, net] }
-    - { role: user_env,        tags: [user_env, dotfiles] }
+- ansible.builtin.import_playbook: playbooks/proxmox-host.yml
+- ansible.builtin.import_playbook: playbooks/autobase.yml

@@ -1,76 +1,27 @@
 ---
 # Global, non-secret defaults for every host.
+#
+# This file used to carry the Mint-era package sets (base_packages,
+# hardware_packages, cleanup_packages, cockpit_extras, virtualization_*) for
+# tav-serv when it was a Linux Mint box. Those went with the roles that consumed
+# them; host utilities now live in roles/proxmox_host/defaults, guest packages in
+# group_vars/autobase_guests.yml. `git log` has the originals.
 
 timezone: America/New_York
 locale: en_US.UTF-8
 
-# Base package set — always installed
-base_packages:
-  - htop
-  - bottom
-  - ncdu
-  - tmux
-  - iotop
-  - iftop
-  - lsof
-  - strace
-  - tree
-  - pv
-  - rsync
-  - jq
-  - unzip
-  - curl
-  - ca-certificates
-  - gnupg
-  - apt-transport-https
-
-# Hardware/monitoring tools
-hardware_packages:
-  - smartmontools
-  - ipmitool
-  - freeipmi-tools
-  - lm-sensors
-
-# unattended-upgrades
-unattended_upgrades_enabled: true
-
-# Cockpit
-cockpit_enabled: true
-cockpit_extras:
-  - cockpit-machines
-  - cockpit-pcp
-  - cockpit-storaged
-  - cockpit-networkmanager
-  - cockpit-packagekit
-
-# Docker CE from Docker's official Ubuntu repo
+# Docker. Only the Autobase console VM gets it — deliberately NOT the hypervisor,
+# where Docker's iptables and bridge management would fight PVE's. The console
+# overrides docker_users in group_vars/autobase_console.yml.
 docker_enabled: true
-docker_users:
-  - tavaresm1
 
-# VirtualBox + libvirt/KVM
-virtualization_libvirt_enabled: true
-virtualization_vbox_enabled: true
-
-# Tailscale — flags to pass to `tailscale up`
+# Tailscale. These flags are written for tav-serv, which is the tailnet subnet
+# router for the lab LAN — that is what makes iDRAC (192.168.0.120), the PVE UI
+# and the Autobase guests reachable from anywhere on the tailnet. The route needs
+# one-time approval in the Tailscale admin console.
+# Guests must NOT inherit this; autobase_console.yml overrides it.
 tailscale_enabled: true
 tailscale_up_flags:
   - --ssh
   - --advertise-routes=192.168.0.0/24
   - --accept-routes
-
-# Openbox/LXDE cruft to remove
-cleanup_packages:
-  - openbox
-  - obconf
-  - tint2
-  - lxappearance
-  - lxterminal
-  - lxde-settings-daemon
-  - lxde-icon-theme
-  - lxmenu-data
-  - libmenu-cache-bin
-  - libmenu-cache3
-  - libobrender32v5
-  - libobt2v5
-  - pcmanfm

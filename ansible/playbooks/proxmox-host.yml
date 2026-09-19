@@ -1,0 +1,19 @@
+---
+# tav-serv itself — the Proxmox VE node. Nothing in here touches guests.
+#
+#   ansible-playbook playbooks/proxmox-host.yml
+#   ansible-playbook playbooks/proxmox-host.yml --tags smart
+#
+# Scope is deliberately small. PVE owns its own storage, networking, firewall
+# and cluster config, and second-guessing it from Ansible is how you lose a
+# hypervisor. This adds the things PVE does not: timezone, troubleshooting
+# tools, SMART monitoring for the PERC disks, and the tailnet subnet route.
+
+- name: Baseline the Proxmox host
+  hosts: proxmox
+  become: true
+  gather_facts: true
+
+  roles:
+    - { role: proxmox_host, tags: [proxmox_host] }
+    - { role: tailscale, tags: [tailscale, net] }

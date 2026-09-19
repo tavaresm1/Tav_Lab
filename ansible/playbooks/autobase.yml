@@ -1,5 +1,5 @@
 ---
-# Autobase platform on pve. Runbook: docs/autobase.md
+# Autobase platform on tav-serv, the Proxmox host. Runbook: docs/autobase.md
 #
 #   ansible-playbook playbooks/autobase.yml --ask-vault-pass
 #
@@ -13,7 +13,7 @@
 # themselves are created from the Console UI (or the vitabaks.autobase
 # collection) — that is Autobase's job, not ours.
 
-- name: Preflight checks on pve
+- name: Preflight checks on tav-serv
   hosts: proxmox
   become: true
   gather_facts: true
@@ -72,7 +72,7 @@
     - name: Report free memory against the platform's budget
       ansible.builtin.debug:
         msg: >-
-          pve has {{ ansible_memfree_mb }} MB free of {{ ansible_memtotal_mb }} MB.
+          tav-serv has {{ ansible_memfree_mb }} MB free of {{ ansible_memtotal_mb }} MB.
           This platform wants
           {{ autobase_guests.values() | map(attribute='memory') | sum }} MB resident.
 

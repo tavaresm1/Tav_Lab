@@ -4,6 +4,51 @@ The choices that shaped how the repo and the box look today, with the
 reasoning behind each one. Read this before pushing back on any of them —
 some are deliberate trade-offs, not accidents.
 
+## tav-serv is a Proxmox host now; the Mint-era roles are retired
+
+**Choice:** The R610 keeps the name `tav-serv` but runs Proxmox VE 9 (Debian 13)
+instead of Linux Mint 22.3. The roles that configured it as a Mint box were
+removed rather than made conditional: `base`, `monitoring`, `virtualization`,
+`user_env`. `roles/proxmox_host` replaces them with a much smaller surface.
+
+**What went, and why:**
+
+| Removed | Why |
+|---|---|
+| `roles/base` — Mint apt sources, Openbox/LXDE purge, 8 GB swapfile, unattended-upgrades | No desktop on a hypervisor; PVE sets up swap on LVM at install; unattended apt moving kernels and qemu under running guests is not something you want at 06:00 |
+| `roles/virtualization` — libvirt + VirtualBox + the `haos` VM | PVE *is* the hypervisor. A second stack underneath it is redundant at best. |
+| `roles/monitoring` — Cockpit | PVE's own UI is on `:8006`. smartd survived, folded into `roles/proxmox_host`. |
+| `roles/user_env` — `tavaresm1` dotfiles and authorized_keys | PVE is administered as root; there is no interactive login user to furnish. |
+| `docker_stacks: dockhand` in `host_vars/tav-serv.yml` | Container workloads belong in a guest, not on the hypervisor. |
+
+**Reasoning:** Keeping the old roles behind `when: ansible_distribution == ...`
+guards would have meant carrying two OS idioms forever for a single host, and
+every one of them was written against assumptions (a desktop, a swapfile, a
+non-root admin user, VirtualBox) that the rebuild invalidated. `git log` is a
+better archive than a dead code path.
+
+**Trade-off accepted:** Anyone wanting the Mint configuration back has to read
+git history rather than flip a variable. The software inventory from that era is
+preserved in `tav-serv-inventory.md` for reference.
+
+## The control node runs on the workstation, not on the hypervisor
+
+**Choice:** The `control-node` container runs on `tavares-lab` (the Windows
+workstation) and reaches tav-serv over the tailnet. Docker is deliberately not
+installed on the Proxmox node.
+
+**Reasoning:** Docker CE rewrites iptables/nftables and manages its own bridges,
+which collides with PVE's firewall and `vmbr0` — a class of failure that takes
+the whole lab down, not one service. The workstation already has the repo
+checkout, the vault password and the SSH keys. And the control node's first job
+is *building* the guests, so it cannot live inside one.
+
+**Trade-off accepted:** Ansible runs depend on the workstation being awake. That
+is fine for provisioning, which is interactive anyway. If scheduled day-2
+`vitabaks.autobase` runs become a want, the place for them is a container on the
+`autobase-console` VM, which already runs Docker and already has SSH to all three
+DB nodes — an addition, not a move.
+
 ## RAID 0 across two HDDs (current) → RAID 5 across three SSDs (planned)
 
 **Current state:** RAID 0 across 2× 1 TB SAS HDDs, no redundancy.
@@ -18,16 +63,18 @@ negligible on SSDs, and the box graduates from scratch to persistent.
 
 ## Ansible over Terraform for VMs
 
-**Choice:** VM declarations live in `roles/virtualization/tasks/main.yml`
-using `VBoxManage` shell-outs, not Terraform's libvirt/virtualbox providers.
+**Choice:** VM declarations live in Ansible — `group_vars/autobase.yml` plus
+`roles/proxmox_guests` — not in Terraform's `bpg/proxmox` provider.
 
 **Reasoning:** One host, one operator, VMs get created rarely. The overhead
 of maintaining a second tool (state file, provider install, apply cycle)
 isn't worth it at this scale. If the fleet grows past ~3 hosts, revisit.
 
-**Trade-off accepted:** VBox VMs are create-only in this role — the tasks
-don't reconcile drift on running VMs. Post-creation edits are intentional
-and manual. This is fine for a homelab; less fine for production.
+**Trade-off accepted:** No state file, so no real drift detection. The
+mechanics of how that is mitigated on Proxmox are in "Autobase guests: Ansible +
+community.proxmox" below. This decision predates the rebuild — it was originally
+made for the VirtualBox `haos` VM under Mint — and survived it unchanged, which
+is a reasonable sign it was right.
 
 ## Public github.com repo
 
@@ -42,22 +89,29 @@ gitignored. The Tailscale auth key, any SMTP creds for smartd alerts, and
 similar must never be committed in plaintext. See the top-level README for
 vault usage.
 
-## NOPASSWD sudo grant on Tav-Serv
+## SSH key as the trust anchor; no interactive sudo prompt anywhere
 
-**Choice:** `tavaresm1 ALL=(ALL) NOPASSWD:ALL` at
-`/etc/sudoers.d/90-tavaresm1-nopasswd`.
+**Choice:** Ansible connects to tav-serv **as root** — that is how PVE is
+administered and there is no second account on it. On the guests it connects as
+`ansible`, which `roles/guest_baseline` grants `NOPASSWD:ALL` via
+`/etc/sudoers.d/90-ansible-nopasswd`.
 
 **Reasoning:** The alternatives are `--ask-become-pass` per playbook run
-(constant friction) or vault-stored sudo password (still adds a prompt for
-the vault password). NOPASSWD is the cleanest for a homelab where the
-control-node SSH key is the trust anchor.
+(constant friction) or a vault-stored sudo password (which still adds a prompt,
+for the vault). The SSH key is already the thing that has to be protected; adding
+a sudo password in front of it buys nothing when the same key can read the
+sudoers file.
 
-**Trade-off accepted:** If the control-node SSH key is compromised, so is
-root on Tav-Serv. Mitigated by:
-- Dedicated per-host SSH keypair (`control-node/ssh_keys/ansible_control`)
-- Key never leaves the control-node host
-- Each control-node host is authorized independently on Tav-Serv, so any
-  one key can be revoked without disrupting the others
+**Trade-off accepted:** Whoever holds `control-node/ssh_keys/ansible_control`
+has root on the hypervisor, and whoever holds `ssh_keys/autobase` has root on
+every guest. Mitigated by:
+- Two separate keypairs, so either trust path can be revoked alone
+- Keys never leave the control-node host (gitignored, mounted read-only)
+- Each control-node host is authorized independently, so one key can be revoked
+  without disrupting the others
+
+Pre-rebuild this was `tavaresm1 ALL=(ALL) NOPASSWD:ALL` on the Mint box; the
+reasoning carried over verbatim, only the account changed.
 
 ## Containerized control node
 
@@ -65,8 +119,9 @@ root on Tav-Serv. Mitigated by:
 `control-node/`, not from a system-installed Ansible.
 
 **Reasoning:**
-- Portable across Linux, Windows Docker Desktop, macOS, WSL, and Tav-Serv
-  itself. No "install Ansible on your workstation" prerequisite.
+- No "install Ansible on your workstation" prerequisite, and it works the same
+  on Linux, Windows Docker Desktop, macOS and WSL. (Not on the hypervisor — see
+  the control-node placement decision above.)
 - Bundled collection versions match what the roles expect — no drift from
   the host's system Ansible.
 - Each control-node host gets its own SSH key, its own build, its own
@@ -77,28 +132,24 @@ opted-in for the container to inherit the host's Tailscale connection. If
 that's not available, the container falls back to bridge networking with a
 NAT hop — works, slightly slower.
 
-## Openbox cleanup deferred
+## Docker stacks are declared inline, one variable per host
 
-**Choice:** `openbox`, `obconf`, `tint2`, `lxappearance`, `lxterminal`,
-`pcmanfm`, and various LXDE bits stayed installed on 2026-07-05, listed in
-`cleanup_packages` for Ansible to remove on next apply.
+**Choice:** `roles/docker` takes a `docker_stacks` list where each stack's
+compose file is an inline multi-line YAML string, set in the group_vars or
+host_vars of whichever host runs it.
 
-**Reasoning:** The user opted to leave them for now rather than run the
-removal manually. Codifying them in `cleanup_packages` means they'll be
-purged on next apply automatically, without a separate manual step.
+**Reasoning:** With one or two stacks, it's less scaffolding than a separate
+`templates/*.j2` per stack. Inline keeps a stack's config next to its
+declaration.
 
-## Docker stacks live inline in host_vars
+**Trade-off accepted:** Doesn't scale. When the stack count crosses ~5-10, split
+into `roles/docker/templates/<stack>.compose.yml.j2` and reference those instead.
+The Autobase Console already deviates, for a different reason — see below.
 
-**Choice:** Each stack's compose file is embedded as a multi-line YAML
-string under `docker_stacks` in `host_vars/tav-serv.yml`.
-
-**Reasoning:** With one or two stacks, it's less scaffolding than a
-separate `templates/*.j2` per stack. Inline keeps the config for a stack
-close to its declaration.
-
-**Trade-off accepted:** Doesn't scale. When the stack count crosses ~5-10,
-split into `roles/docker/templates/<stack>.compose.yml.j2` and reference
-them from `host_vars`.
+**Note:** the original consumer of this was the `dockhand` stack in
+`host_vars/tav-serv.yml`, which went away with the Proxmox rebuild (containers
+belong in a guest, not on the hypervisor). The convention stands and
+`roles/docker` still implements it; there is currently no host using it.
 
 ## Tailscale flag drift handled via `tailscale set`
 
@@ -124,7 +175,7 @@ second toolchain for four VMs.
 **Trade-off accepted:** No state file means no drift detection. The role
 compensates where it matters: `update: true` reapplies sizing and cloud-init on
 every run, and `proxmox_disk` reconciles disk size. Nothing reconciles NIC or
-storage changes — those stay manual, same as the VBox role.
+storage changes — those stay manual.
 
 **Note:** The Proxmox modules were migrated out of `community.general` and
 removed from it in 11.0.0. `community.general.proxmox_kvm` no longer resolves;
@@ -165,7 +216,7 @@ run needs network access to raw.githubusercontent.com.
 
 **Choice:** All four platform guests run Ubuntu Server 24.04 LTS.
 
-**Reasoning:** Rocky 10 was the original choice and did not boot on `pve`. RHEL 10
+**Reasoning:** Rocky 10 was the original choice and did not boot on tav-serv. RHEL 10
 and its rebuilds raised the baseline to `x86-64-v3` (AVX2, BMI2, FMA, Haswell and
 later); the kernel refuses to start on older silicon or under a VM CPU type that
 masks those flags, and it does so before anything reaches a console. Ubuntu 24.04
@@ -176,13 +227,15 @@ Rocky **9** is also `x86-64-v2` and would most likely have booted, but Ubuntu
 keeps the whole platform on one package idiom as PVE itself and removes the second
 `dnf`/`apt` code path from the roles.
 
-**Trade-off accepted:** The `base` role is still Mint-specific (swapfile sizing,
-Openbox cleanup, hardware packages) so it is not reused on the guests —
-`roles/guest_baseline` is the apt-based platform equivalent. The Docker and
-Tailscale apt repos moved out of `base` and into `roles/docker` and
-`roles/tailscale` so those roles stand alone on hosts that never run `base`; each
-maps a distribution codename through a role default, because Mint reports its own
-codename and neither vendor publishes a Mint repo.
+**Consequence for the roles:** there is no shared baseline role any more.
+`roles/proxmox_host` baselines the Debian hypervisor and `roles/guest_baseline`
+baselines the Ubuntu guests; the two have almost nothing in common beyond
+timezone, so sharing one role would have meant conditionals throughout. The
+Docker and Tailscale apt repos live inside `roles/docker` and `roles/tailscale`
+rather than in a baseline role, so each stands alone; both map the distribution
+codename through a role default, because Tailscale and Docker publish separate
+per-distro, per-codename repos and the hypervisor (`debian`/`trixie`) and the
+guests (`ubuntu`/`noble`) need different ones.
 
 **Not applicable any more:** with Ubuntu there is no SELinux, so the earlier
 decision to keep it `Enforcing` while disabling Docker's labelling is moot.
@@ -193,14 +246,18 @@ Console's `/var/run/docker.sock` bind-mount needs no extra handling.
 
 Deliberate scope exclusions:
 
+- **PVE's own configuration** — storage, bridges, cluster membership, firewall.
+  Second-guessing the hypervisor from Ansible is how you lose a hypervisor.
 - **iDRAC config** beyond a password reset — hardware BMC lifecycle is
   separate from the OS. Not worth automating for one node.
 - **BIOS updates** — manual via Dell DUP or Lifecycle Controller.
-- **Guest OS state inside VMs** — the VM is provisioned by this repo, but
-  whatever runs *inside* HAOS (or future VMs) is managed by that VM's own
-  tooling.
+- **Pre-existing guests** — TrueNAS SCALE (VM 100) and the Minecraft/BlueMap
+  server predate this repo and are not managed by it.
+- **Guest OS state inside VMs** — the VM shell is provisioned by this repo, but
+  whatever runs *inside* it (PostgreSQL, TrueNAS, the Console's own containers)
+  is managed by that guest's own tooling.
 - **Backups themselves** — a separate concern. This repo defines the box;
-  a separate backup tool (rsync/borg to the QNAP over Tailscale) handles
-  data protection.
+  a separate backup path (`vzdump` + rsync/borg to the QNAP over Tailscale)
+  handles data protection.
 - **Ephemeral fixups** — anything only useful during a debug session.
   If it needs to survive a rebuild, it goes in a role.

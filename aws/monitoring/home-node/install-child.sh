@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run on each home node (the pve host itself, and inside each guest you care
-# about). Installs the Netdata child + Grafana Alloy and points both at the
+# Run on each home node (tav-serv, the Proxmox host, and inside each guest you
+# care about). Installs the Netdata child + Grafana Alloy and points both at the
 # monitoring node over the tailnet.
 #
 #   MON_HOST=mon-aws ND_KEY=<uuid> ./install-child.sh

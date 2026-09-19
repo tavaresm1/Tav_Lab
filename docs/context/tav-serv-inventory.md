@@ -1,9 +1,18 @@
-# Tav-Serv software inventory (2026-07-05)
+# Tav-Serv software inventory (2026-07-05) — HISTORICAL
 
-Snapshot of what's actually on the box, audited via `apt-mark showmanual`,
+> **Superseded.** This describes tav-serv as a **Linux Mint 22.3 + VirtualBox**
+> box. It has since been rebuilt as a **Proxmox VE 9** hypervisor, and the roles
+> that produced the state below (`base`, `monitoring`, `virtualization`,
+> `user_env`) were removed from the repo along with the `dockhand` stack and the
+> HAOS VM. See `design-decisions.md` → "tav-serv is a Proxmox host now".
+>
+> Kept for reference — it is the record of what the box used to do, useful when
+> deciding whether a workload needs a home again (as a guest, not on the
+> hypervisor). **It is not a target state. Do not treat anything below as
+> something Ansible should reproduce.**
+
+Snapshot of what was on the box, audited via `apt-mark showmanual`,
 `docker ps`, `VBoxManage list vms`, and `systemctl list-unit-files`.
-Every line item here should either be declared in the Ansible roles or
-explicitly documented as out-of-scope.
 
 ## Base OS
 
@@ -57,16 +66,21 @@ initial package list.
 - pcmanfm
 
 These came from an earlier install experiment and were deferred for cleanup
-on 2026-07-05. They are listed in `ansible/group_vars/all.yml` under
-`cleanup_packages`, so the base role will purge them on next apply.
+on 2026-07-05. They were listed in `ansible/group_vars/all.yml` under
+`cleanup_packages` for the `base` role to purge. Moot now — the Proxmox
+reinstall took the whole desktop with it, and both the variable and the role
+are gone.
 
 ## Third-party apt repositories
 
 - `download.docker.com/linux/ubuntu` (noble stable) — Docker CE
 - `pkgs.tailscale.com/stable/ubuntu` (noble main) — Tailscale
 
-Both are re-declared in the Ansible `base` role, keyed by `/etc/apt/keyrings/docker.asc`
-and `/usr/share/keyrings/tailscale-archive-keyring.gpg`.
+Both were re-declared in the Ansible `base` role, keyed by
+`/etc/apt/keyrings/docker.asc` and
+`/usr/share/keyrings/tailscale-archive-keyring.gpg`. Those repo definitions now
+live in `roles/docker` and `roles/tailscale` and map the codename per host —
+`debian`/`trixie` for the hypervisor, `ubuntu`/`noble` for the guests.
 
 ## Running workloads
 

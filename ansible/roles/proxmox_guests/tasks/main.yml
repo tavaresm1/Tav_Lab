@@ -1,7 +1,7 @@
 ---
 # Clones the cloud-init template into the four Autobase guests.
 #
-# Runs in a play targeting [proxmox] so pve's vars are in scope, but the API
+# Runs in a play targeting [proxmox] so tav-serv's vars are in scope, but the API
 # tasks are delegated to the control node — proxmox_kvm talks to the PVE REST
 # API, it does not need to run on the node.
 #

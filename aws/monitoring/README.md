@@ -1,23 +1,26 @@
 # Tailnet monitoring node — deployment runbook
 
 Builds an always-on **external** monitoring host in AWS, joined to your tailnet, that
-watches the `pve` Proxmox node and its guests.
+watches **tav-serv** — the Dell R610 running Proxmox VE — and its guests.
 
-External on purpose: `pve` is now the only home hypervisor, so anything running *on*
-`pve` cannot tell you when `pve` has died. That single fact drives the whole design.
+External on purpose: tav-serv is the only home hypervisor, so anything running *on*
+tav-serv cannot tell you when tav-serv has died. That single fact drives the whole
+design, and it is the same reason three "HA" Postgres nodes on one box are not
+host-level HA.
 
 ```
                         tailnet (WireGuard)
-  ┌───────────────┐                              ┌───────────────────────────────┐
-  │ pve (Proxmox) │── netdata child ──── push ──▶│ mon-aws  (EC2 Graviton)        │
-  │  ├ TrueNAS VM │── alloy (journal) ── push ──▶│   netdata parent      :19999   │
-  │  └ kieran-    │                              │   uptime-kuma         :3001    │
-  │     craft     │◀──── synthetic probes ───────│   ntfy                :8080    │
-  └───────────────┘                              │   loki                :3100    │
-  ┌───────────────┐                              │   grafana             :3000    │
-  │ Windows / phone│──── browser / app ─────────▶│                               │
-  └───────────────┘                              └───────────────────────────────┘
-                                                  Security group: ZERO inbound rules
+  ┌────────────────┐                             ┌───────────────────────────────┐
+  │ tav-serv (PVE) │─ netdata child ──── push ──▶│ mon-aws  (EC2 Graviton)        │
+  │  ├ TrueNAS VM  │─ alloy (journal) ── push ──▶│   netdata parent      :19999   │
+  │  ├ kieran-craft│                             │   uptime-kuma         :3001    │
+  │  └ autobase +  │◀──── synthetic probes ──────│   ntfy                :8080    │
+  │     pgnode01-3 │                             │   loki                :3100    │
+  └────────────────┘                             │   grafana             :3000    │
+  ┌────────────────┐                             │                               │
+  │ tavares-lab /  │──── browser / app ─────────▶│                               │
+  │ phone          │                             └───────────────────────────────┘
+  └────────────────┘                              Security group: ZERO inbound rules
 ```
 
 **Metrics and logs are pushed upward**, so the monitoring node never dials into your
@@ -109,9 +112,9 @@ session-manager-plugin --version   # should print a version
 
 ## 1.3 Tailscale on this workstation (not detected)
 
-I could not find `tailscale` on PATH or in `C:\Program Files\Tailscale\`. If it was
-removed along with Tav-Serv, reinstall it — you need this workstation on the tailnet
-to reach any of the monitoring UIs.
+`tailscale` was not found on PATH or in `C:\Program Files\Tailscale\` on
+`tavares-lab`. Reinstall it — the workstation needs to be on the tailnet both to
+reach the monitoring UIs and to run the Ansible control node against tav-serv.
 
 <https://tailscale.com/download/windows>
 
@@ -426,8 +429,8 @@ from there — which is why this stack needs no `prometheus-pve-exporter`.
 ND_KEY=$(aws ssm get-parameter --name /monitoring/netdata-stream-key \
   --with-decryption --query Parameter.Value --output text)
 
-scp home-node/install-child.sh home-node/config.alloy root@pve:/tmp/
-ssh root@pve "cd /tmp && MON_HOST=mon-aws ND_KEY=$ND_KEY bash install-child.sh"
+scp home-node/install-child.sh home-node/config.alloy root@tav-serv:/tmp/
+ssh root@tav-serv "cd /tmp && MON_HOST=mon-aws ND_KEY=$ND_KEY bash install-child.sh"
 ```
 
 The script installs Netdata as a child (`memory mode = ram`, local health disabled so
@@ -438,10 +441,11 @@ nothing.
 Verify within about a minute:
 
 ```bash
-ssh root@pve "systemctl status netdata alloy --no-pager | grep -E 'Active|●'"
+ssh root@tav-serv "systemctl status netdata alloy --no-pager | grep -E 'Active|●'"
 ```
 
-Then check <http://mon-aws:19999> — `pve` should appear in the node list on the left.
+Then check <http://mon-aws:19999> — `tav-serv` should appear in the node list on the
+left.
 
 ## 5.2 Guest VMs and containers
 
@@ -450,8 +454,13 @@ Same command, per guest. Run it only where it earns its keep:
 | Guest | Do this |
 |---|---|
 | `kieran-craft` (Minecraft) | Run the script. Debian/Ubuntu based, works as-is. |
-| **TrueNAS SCALE (VM 100)** | **Do not run the script.** SCALE is an appliance — packages installed by hand don't survive upgrades. Monitor it with Uptime Kuma probes plus its own built-in reporting. Hypervisor-level CPU/RAM/disk still comes from `pve`. |
+| `pgnode01-03` | Run the script — these are the ones where per-process and disk-latency metrics earn their keep. Ubuntu 24.04, works as-is. Netdata also auto-detects the local PostgreSQL and PgBouncer once Autobase has deployed them. |
+| `autobase-console` | Optional. It's a Docker host, so the cgroup collector gives you per-container CPU/RAM for the four Console services. |
+| **TrueNAS SCALE (VM 100)** | **Do not run the script.** SCALE is an appliance — packages installed by hand don't survive upgrades. Monitor it with Uptime Kuma probes plus its own built-in reporting. Hypervisor-level CPU/RAM/disk still comes from tav-serv. |
 | LXC containers | The script works, but many collectors are limited inside a container. Often not worth it — the host's cgroup metrics already cover resource use. |
+
+The guests are not on the tailnet themselves; they reach `mon-aws` outbound through
+tav-serv's subnet route, which is all a push-based child needs.
 
 ## 5.3 Confirm logs are arriving
 
@@ -475,10 +484,13 @@ Add these monitors:
 
 | Name | Type | Target | Notes |
 |---|---|---|---|
-| pve web UI | HTTP(s) | `https://pve:8006` | Turn **off** certificate validation (self-signed). |
+| PVE web UI | HTTP(s) | `https://tav-serv:8006` | Turn **off** certificate validation (self-signed). |
 | TrueNAS UI | HTTP(s) | `https://<truenas>` | Certificate validation off. |
-| Minecraft | TCP Port | `pve` : `25565` | Port check, not HTTP. |
-| BlueMap | HTTP(s) | `http://pve:8100` | |
+| Minecraft | TCP Port | `tav-serv` : `25565` | Port check, not HTTP. |
+| BlueMap | HTTP(s) | `http://tav-serv:8100` | |
+| Autobase Console | HTTP(s) | `https://autobase` | Via `tailscale serve` on the console VM. |
+| Postgres VIP | TCP Port | `<autobase_cluster_vip>` : `5432` | The write endpoint. Down = no primary, which is the alarm you actually want. |
+| PgBouncer VIP | TCP Port | `<autobase_cluster_vip>` : `6432` | |
 | **Home heartbeat** | **Push** | — | **The important one. See below.** |
 
 ## 6.1 The heartbeat monitor — the alarm that matters most
@@ -487,17 +499,17 @@ Every monitor above tells you a *service* is down. The push monitor tells you th
 *house* is down, which is the reason this node is in AWS at all.
 
 Create a **Push** monitor, set the heartbeat interval to 120 seconds, and copy its
-push URL. Then on the `pve` host:
+push URL. Then on tav-serv:
 
 ```bash
-ssh root@pve
+ssh root@tav-serv
 cat >/etc/cron.d/uptime-heartbeat <<'EOF'
 * * * * * root curl -fsS --max-time 20 "http://mon-aws:3001/api/push/<TOKEN>" >/dev/null 2>&1
 EOF
 systemctl restart cron
 ```
 
-Substitute the real token. If `pve` dies, loses power, or your internet drops, the
+Substitute the real token. If tav-serv dies, loses power, or your internet drops, the
 pushes stop and Uptime Kuma alerts. Nothing running at home can do this for you.
 
 ## 6.2 Wire notifications
@@ -719,6 +731,7 @@ Other likely first-boot friction, in order:
 ## Still to do
 
 - Ansible roles for the child side (`netdata_child`, `alloy`) to replace
-  `install-child.sh`, in the `ansible/` tree alongside the retargeted `pve` inventory.
+  `install-child.sh`. They belong in the `ansible/` tree, where `inventory/hosts.ini`
+  already has tav-serv and the platform guests as targets.
 - No Prometheus, so no PromQL or dashboards-as-code.
 - Grafana has no dashboards provisioned beyond the Loki datasource.

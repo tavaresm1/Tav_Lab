@@ -1,4 +1,4 @@
-# Autobase — self-hosted Postgres HA platform on pve
+# Autobase — self-hosted Postgres HA platform on tav-serv
 
 [Autobase](https://github.com/autobase-tech/autobase) (formerly
 `vitabaks/postgresql_cluster`) gives you a DBaaS-style web console that builds
@@ -49,11 +49,11 @@ the DCS cannot.
 
 Everything in the `FILL IN` block at the top of
 [`../ansible/group_vars/autobase.yml`](../ansible/group_vars/autobase.yml) starts
-as a placeholder inferred from the old Tav-Serv LAN. The playbook refuses to run
+as a placeholder inferred from the documented lab LAN. The playbook refuses to run
 until you have confirmed them and flipped `autobase_preflight_confirmed: true`.
 
 ```bash
-ssh root@pve '
+ssh root@tav-serv '
   pvecm status 2>&1 | head -5     # single node, or a real cluster?
   free -m; nproc
   pvesm status                    # storage IDs + free space (need ~180 GB)
@@ -75,7 +75,7 @@ but not a host failure.
 **Proxmox API token** (used by `community.proxmox.proxmox_kvm`):
 
 ```bash
-ssh root@pve '
+ssh root@tav-serv '
   pveum user add ansible@pve
   pveum aclmod / -user ansible@pve -role PVEVMAdmin
   pveum aclmod /storage -user ansible@pve -role PVEDatastoreUser
@@ -90,9 +90,9 @@ guessing — `PVEVMAdmin` covers clone/config/start but not every storage action
 
 ```bash
 cd control-node
-ssh-keygen -t ed25519 -f ./ssh_keys/ansible_control -C "ansible-control@pve"  # → root@pve
-ssh-keygen -t ed25519 -f ./ssh_keys/autobase        -C "autobase@pve"         # → ansible@guests
-ssh-copy-id -i ./ssh_keys/ansible_control.pub root@pve
+ssh-keygen -t ed25519 -f ./ssh_keys/ansible_control -C "ansible-control@tavares-lab"  # → root@tav-serv
+ssh-keygen -t ed25519 -f ./ssh_keys/autobase        -C "autobase@tavares-lab"  # → ansible@guests
+ssh-copy-id -i ./ssh_keys/ansible_control.pub root@tav-serv
 ```
 
 Paste `ssh_keys/autobase.pub` into `autobase_ssh_pubkey` in
@@ -114,16 +114,16 @@ vault_tailscale_authkey: "<tskey-auth-... for the console VM's unattended join>"
 ## 3. Run it
 
 From a host **on the tailnet** (this is the current constraint — a workstation
-off the tailnet cannot resolve `pve`):
+off the tailnet cannot resolve `tav-serv`):
 
 ```bash
 cd control-node
 docker compose build          # context is the repo root; bakes in requirements.yml
-docker compose run --rm ansible ansible -i inventory/hosts.ini pve -m ping
+docker compose run --rm ansible ansible -i inventory/hosts.ini proxmox -m ping
 docker compose run --rm ansible ansible-playbook playbooks/autobase.yml --ask-vault-pass
 ```
 
-Or directly on `pve`, if you'd rather not involve the container.
+Or directly on `tav-serv`, if you'd rather not involve the container.
 
 Slices, once the first run is done:
 
@@ -141,7 +141,7 @@ minutes. Subsequent runs skip it — the template build is guarded on
 ## 4. Verify the guests
 
 ```bash
-ssh root@pve 'qm list'                 # 8000 template + 8001-8003 + 8010
+ssh root@tav-serv 'qm list'                 # 8000 template + 8001-8003 + 8010
 ansible autobase_guests -m ping
 ansible pg_nodes -a 'df -h /'          # ~40 GB — growpart ran, not the 3.5 GB image
 ansible autobase_guests -a 'systemctl is-active qemu-guest-agent chrony'
@@ -151,7 +151,8 @@ If `df` shows the image's original size, cloud-init's `growpart` did not run —
 the disk resize must happen *before* first boot, which is the order
 `roles/proxmox_guests` uses. Re-running the `guests` tag after a manual resize
 will not grow the filesystem; grow it in the guest with
-`growpart /dev/sda 4 && xfs_growfs /`.
+`growpart /dev/sda 1 && resize2fs /dev/sda1` (the Ubuntu cloud image puts an
+ext4 root on partition 1 — 14/15/16 are bios_grub, ESP and `/boot`).
 
 ## 5. Create the first cluster (Console UI)
 
@@ -231,7 +232,7 @@ Console deploys; for CLI work, keep one derived from
 - **The Console phones home** to `https://billing.autobase.tech` for signed
   entitlements. The console VM needs outbound HTTPS.
 - **Three Postgres nodes on one physical host is not host-level HA.** You get
-  genuine Patroni failover and a real etcd quorum to test against, but `pve`
+  genuine Patroni failover and a real etcd quorum to test against, but `tav-serv`
   stays a single point of failure — which is exactly why the monitoring node
   lives in AWS (`aws/monitoring/README.md`).
 - **No host firewall by default.** `guest_firewall_enabled: false`, matching the
@@ -239,13 +240,15 @@ Console deploys; for CLI work, keep one derived from
   `guest_baseline` configures ufw: SSH first, then 5432, 6432, 8008, 2379 and 2380
   restricted to `autobase_subnet_cidr`, then default-deny inbound. Add 5000-5003
   and 7000 to `autobase_cluster_ports` if you later turn on HAProxy.
-- **Ubuntu, not Rocky.** Rocky 10 was the first choice and would not boot on
-  `pve`: RHEL 10 requires an `x86-64-v3` CPU (AVX2/BMI2/FMA) and halts before the
-  console on older silicon. Ubuntu 24.04 needs only `x86-64-v2`. Autobase's CI
-  covers Ubuntu 24.04 daily, so this costs nothing.
+- **Ubuntu, not Rocky.** Rocky 10 was the first choice and would not boot. RHEL 10
+  requires an `x86-64-v3` CPU (AVX2/BMI2/FMA, Haswell and later); tav-serv is a
+  single X5670 — Westmere-EP, 2010, no AVX at all — so it tops out at
+  `x86-64-v2` and the kernel halts before reaching a console. Ubuntu 24.04 runs
+  on `x86-64-v2`, and Autobase's CI covers it daily.
 - **VMIDs share one namespace with containers.** `roles/proxmox_guests` asserts
   that any pre-existing VMID in `autobase_guests` carries the expected name, so
   a collision with TrueNAS (100) or the Minecraft guest stops the run instead of
   resizing someone else's disk.
-- `ansible/site.yml` still targets the decommissioned `tav-serv`. This platform
-  is a separate playbook on purpose.
+- **The hypervisor's own baseline is a separate playbook.**
+  `playbooks/proxmox-host.yml` handles tav-serv itself; this one handles the
+  platform. `site.yml` imports both, in that order.

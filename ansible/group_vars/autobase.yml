@@ -2,14 +2,14 @@
 # ============================================================================
 # Autobase platform configuration — the ONE file to edit.
 #
-# Applies to the [autobase] group: the pve hypervisor plus every Ubuntu guest.
+# Applies to the [autobase] group: tav-serv plus every Ubuntu guest on it.
 # Runbook: docs/autobase.md
 # ============================================================================
 
 # ----------------------------------------------------------------------------
 # FILL IN from Step 0 discovery (see docs/autobase.md §1). Every value below
-# is a placeholder inferred from the old Tav-Serv LAN — confirm each one
-# against the live host before the first run. The preflight asserts in
+# is a placeholder inferred from the documented lab LAN — confirm each one
+# against tav-serv before the first run. The preflight asserts in
 # playbooks/autobase.yml will stop the run if these are left at defaults
 # while autobase_preflight_confirmed is false.
 # ----------------------------------------------------------------------------
@@ -17,12 +17,12 @@
 # Set to true once you have verified every value in this block.
 autobase_preflight_confirmed: false
 
-# --- Proxmox node ---
-pve_node: pve                     # `pvesh get /nodes` — the node NAME, not the DNS name
-pve_api_host: pve                 # host:8006 the API is reached on
+# --- Proxmox node (tav-serv, the R610) ---
+pve_node: tav-serv                # `pvesh get /nodes` — the node NAME, normally the short hostname
+pve_api_host: tav-serv            # host:8006 the API is reached on
 pve_storage: local-lvm            # `pvesm status` — must have ~180 GB free
 pve_bridge: vmbr0                 # `ip -br addr` / /etc/network/interfaces
-pve_api_user: ansible@pve
+pve_api_user: ansible@pve         # `@pve` is the PVE auth REALM here, not a hostname
 pve_api_token_id: automation
 pve_api_validate_certs: false     # PVE ships a self-signed cert
 
@@ -80,16 +80,17 @@ autobase_guests:
     ip: 192.168.0.43
 
 # ----------------------------------------------------------------------------
-# Cloud-init template (built once on pve by roles/proxmox_template)
+# Cloud-init template (built once on tav-serv by roles/proxmox_template)
 # ----------------------------------------------------------------------------
 pve_template_vmid: 8000
 pve_template_name: ubuntu2404-cloudinit
 pve_image_cache_dir: /var/lib/vz/template/iso
 
-# Ubuntu 24.04 LTS, not Rocky 10: RHEL 10 and its rebuilds require an
-# x86-64-v3 CPU baseline (AVX2/BMI2/FMA) and will not boot on a pre-Haswell
-# host or under a VM CPU type that masks those flags. Ubuntu 24.04 still runs
-# on x86-64-v2. Autobase's CI tests Ubuntu 24.04 daily.
+# Ubuntu 24.04 LTS, not Rocky 10. RHEL 10 and its rebuilds require an x86-64-v3
+# CPU baseline (AVX2/BMI2/FMA, Haswell and later). tav-serv is a single X5670 —
+# Westmere-EP, 2010, no AVX at all — so it tops out at x86-64-v2 and the Rocky 10
+# kernel halts before it reaches a console, whatever --cpu type the VM gets.
+# Ubuntu 24.04 runs on x86-64-v2, and Autobase's CI tests it daily.
 #
 # Verified present 2026-09-18. The `releases/` path is the published release
 # artifact (currently the latest 24.04 point release).
@@ -104,8 +105,8 @@ autobase_ci_user: ansible
 
 # Public half of the key the Console hands to Autobase. Injected by cloud-init.
 # Generate on the control node, then paste the .pub here:
-#   ssh-keygen -t ed25519 -f ./ssh_keys/autobase -C "autobase@pve"
-autobase_ssh_pubkey: "ssh-ed25519 AAAA_REPLACE_ME autobase@pve"
+#   ssh-keygen -t ed25519 -f ./ssh_keys/autobase -C "autobase@tavares-lab"
+autobase_ssh_pubkey: "ssh-ed25519 AAAA_REPLACE_ME autobase@tavares-lab"
 
 # ----------------------------------------------------------------------------
 # Autobase Console

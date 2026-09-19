@@ -1,7 +1,13 @@
 # Hardware upgrades ordered but not yet installed
 
-Snapshot as of 2026-07-05. Track post-install verification steps here so
-whoever installs the parts knows what to check.
+Snapshot as of 2026-07-05; the rebuild flow updated for Proxmox VE. Track
+post-install verification steps here so whoever installs the parts knows what to
+check.
+
+Note on the CPU: the X5670 is Westmere-EP with **no AVX**, which caps the box at
+the `x86-64-v2` microarchitecture level. Adding a second one doesn't change that.
+It is why the guests run Ubuntu rather than a RHEL 10 rebuild — see
+`design-decisions.md`.
 
 ## Second CPU
 
@@ -51,6 +57,11 @@ sudo dmidecode -t memory \
 Every populated slot: `4 GB / 1333 MT/s / Rank 1`. Anything at 1066 MT/s
 or wrong rank indicates a bad DIMM or channel population issue.
 
+Capacity goes 24 GB → 48 GB. The Autobase guest sizing in
+`group_vars/autobase.yml` (9728 MB resident across four VMs) was chosen against
+the current 24 GB with TrueNAS and the Minecraft guest already resident; there is
+room to raise `pgnode` memory afterwards if a cluster needs it.
+
 ## SSDs (three-drive replacement for current HDD pair)
 
 - **Part:** Intel `SSDSC2BX800G4R` — S3610 800 GB, Dell-firmware variant
@@ -93,8 +104,11 @@ Ask the seller for the SMART output on each drive. Look at:
 
 ### Rebuild flow when drives arrive
 
-1. **Backup** everything to the QNAP over Tailscale first (only ~26 GB used,
-   trivial). Snapshot Docker volumes, HAOS VDI, host `/etc` and `/home`.
+1. **Backup** to the QNAP over Tailscale first. `vzdump` every guest you intend
+   to keep — TrueNAS (VM 100), the Minecraft guest, and the Autobase console VM
+   if you don't want to recreate its clusters — plus `/etc/pve` and the host's
+   `/etc`. The `pgnode` guests are disposable: they come back from
+   `playbooks/autobase.yml` and the clusters get recreated from the Console.
 2. Power off, swap the two current 1 TB HDDs for two of the SSDs. Third SSD
    goes in slot 2 (RAID 5 member) or stays on a shelf as a cold spare.
 3. Boot into PERC BIOS (`Ctrl-R` at POST), delete old VD, create new VD
@@ -102,9 +116,20 @@ Ask the seller for the SMART output on each drive. Look at:
 4. Set Write policy to `Write Through` on the new VD (SSDs handle their
    own caching; H700 write-back with BBU actually hurts SSD latency).
 5. Disable disk cache in the drive properties.
-6. Boot Mint installer from USB, install fresh.
-7. Complete first-time bootstrap (NOPASSWD sudo, control-node pubkey).
-8. Apply Ansible playbook — everything else comes back declaratively.
+6. Boot the **Proxmox VE 9 installer** from USB. Hostname `tav-serv`, static IP
+   on the lab LAN. The installer handles partitioning and swap — nothing in this
+   repo does.
+7. Install the control-node pubkey into `/root/.ssh/authorized_keys` (PVE web UI
+   Shell at `https://tav-serv:8006`, or iDRAC if the network is down).
+   `control-node/README.md` step 3.
+8. `ansible-playbook playbooks/proxmox-host.yml`, then re-approve the
+   `192.168.0.0/24` subnet route in the Tailscale admin console — re-registering
+   the node drops the old approval.
+9. Restore the guests from `vzdump`, then rebuild the Postgres platform from
+   `docs/autobase.md`.
+
+The full version of this, not tied to the SSD swap, is the rebuild runbook in the
+top-level `README.md`.
 
 ## Also on the wishlist (not ordered)
 

@@ -1,9 +1,9 @@
 ---
-# Tailscale. The apt repo is set up here rather than in roles/base so the role is
-# self-contained for the Ubuntu platform guests, which never run base.
+# Tailscale. The apt repo is set up here rather than in a shared base role so
+# this works on both families in play: Debian on tav-serv, Ubuntu on the guests.
 - name: Tailscale keyring
   ansible.builtin.get_url:
-    url: "https://pkgs.tailscale.com/stable/ubuntu/{{ tailscale_apt_codename }}.noarmor.gpg"
+    url: "https://pkgs.tailscale.com/stable/{{ tailscale_apt_distro }}/{{ tailscale_apt_codename }}.noarmor.gpg"
     dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
     mode: "0644"
     force: false
@@ -15,7 +15,7 @@
     dest: /etc/apt/sources.list.d/tailscale.list
     mode: "0644"
     content: |
-      deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu {{ tailscale_apt_codename }} main
+      deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/{{ tailscale_apt_distro }} {{ tailscale_apt_codename }} main
   when: tailscale_enabled | default(true)
   tags: [tailscale, net, tailscale-repo]
 

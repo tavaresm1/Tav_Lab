@@ -1,33 +1,48 @@
 # Ansible control-node container
 
-A small Alpine-based Docker image that runs Ansible against Tav-Serv over SSH.
+A small Alpine-based Docker image that runs Ansible against **tav-serv** (the
+Dell R610, running Proxmox VE) and the Autobase guests on it, over SSH.
 
-**This container is portable.** It runs on any machine with Docker and network
-reachability to Tav-Serv (typically via Tailscale). Tav-Serv itself is *not*
-special — you can run the control node from your workstation, a laptop, WSL,
-another Linux box, or on Tav-Serv itself.
+**Where it runs: the `tavares-lab` workstation.** Not on tav-serv, and this is a
+decision rather than an accident:
+
+- Docker CE on a Proxmox node rewrites iptables/nftables and manages its own
+  bridges, which collides with PVE's firewall and `vmbr0`. The hypervisor keeps
+  one job.
+- The control node's first task is *building* the guests, so it cannot live in
+  one of them.
+- The workstation already has the repo checkout, the vault password, the SSH
+  keys and tailnet reachability.
+
+The image itself is still portable — any Docker host on the tailnet works
+(laptop, WSL, another Linux box). If you later want day-2 `vitabaks.autobase`
+runs that don't depend on the workstation being awake, the natural home is a
+container on the `autobase-console` VM, which already runs Docker and already
+holds SSH access to all three DB nodes.
 
 ---
 
-## Prerequisites (host machine)
+## Prerequisites (the workstation)
 
 - **Docker Engine** (Linux) or **Docker Desktop** (Windows/macOS), version 24+
 - **git**
-- **Network access to Tav-Serv**, usually via Tailscale (`100.80.216.116` or
-  MagicDNS name `tav-serv`)
+- **Network access to tav-serv**, via Tailscale MagicDNS name `tav-serv`
 - An OS user with permission to run `docker` (member of the `docker` group on
   Linux, or Docker Desktop running under your login)
 
-Optional but recommended:
-- Tailscale up and logged into the same tailnet as Tav-Serv — the simplest way
-  to make the container reach `100.80.216.116` is to inherit the host's
-  Tailscale connection via host networking (see platform notes below)
+Tailscale must be up on the workstation and logged into the same tailnet as
+tav-serv. The container inherits the host's Tailscale connection through
+`network_mode: host` — see platform notes below.
+
+> The inventory reaches tav-serv by **name**, not by Tailscale IP. The IP
+> changed when the box was re-registered on the tailnet during the Proxmox
+> rebuild, and MagicDNS makes it a non-issue.
 
 ---
 
 ## Bootstrap
 
-### Step 1 — clone the repo on the control-node host
+### Step 1 — clone the repo on the workstation
 
 ```bash
 git clone https://github.com/tavaresm1/Tav_Lab.git
@@ -40,56 +55,53 @@ git clone https://github.com/tavaresm1/Tav_Lab.git
 cd Tav_Lab\control-node
 ```
 
-### Step 2 — generate a dedicated SSH keypair for this control node
+### Step 2 — generate two SSH keypairs
 
-The container mounts these files read-only.
+Two different trust paths, two keys, so either can be revoked alone:
+
+| Key | Authorized on | Installed by |
+|---|---|---|
+| `ansible_control` | `root@tav-serv` | you, by hand, once (step 3) |
+| `autobase` | `ansible@` every platform guest | cloud-init, from `autobase_ssh_pubkey` |
+
+The container mounts both read-only.
 
 Linux / macOS / WSL / Git Bash:
 ```bash
 mkdir -p ssh_keys && chmod 700 ssh_keys
-ssh-keygen -t ed25519 -f ssh_keys/ansible_control \
-           -N '' -C "ansible-control@$(hostname)"
+ssh-keygen -t ed25519 -f ssh_keys/ansible_control -N '' -C "ansible-control@tavares-lab"
+ssh-keygen -t ed25519 -f ssh_keys/autobase        -N '' -C "autobase@tavares-lab"
 ```
 
 Windows PowerShell:
 ```powershell
 New-Item -ItemType Directory -Force ssh_keys | Out-Null
-ssh-keygen -t ed25519 -f ssh_keys\ansible_control -N '""' -C "ansible-control@$env:COMPUTERNAME"
+ssh-keygen -t ed25519 -f ssh_keys\ansible_control -N '""' -C "ansible-control@tavares-lab"
+ssh-keygen -t ed25519 -f ssh_keys\autobase        -N '""' -C "autobase@tavares-lab"
 ```
 
-Two files land in `ssh_keys/`: the private key `ansible_control` and the
-public key `ansible_control.pub`. **Only** the private key gets mounted into
-the container. The `.pub` is what you install on Tav-Serv.
+Paste the contents of `ssh_keys/autobase.pub` into `autobase_ssh_pubkey` in
+`ansible/group_vars/autobase.yml`. That is the key cloud-init installs on the
+guests, and the same one you hand the Autobase Console when you create a
+cluster. See [../docs/autobase.md](../docs/autobase.md).
 
-### Step 3 — install the pubkey on Tav-Serv
+### Step 3 — install the control pubkey on tav-serv
 
-Whichever way is easiest, get the content of `ssh_keys/ansible_control.pub`
-appended to `/home/tavaresm1/.ssh/authorized_keys` on Tav-Serv.
+Get `ssh_keys/ansible_control.pub` appended to `/root/.ssh/authorized_keys` on
+tav-serv. PVE logs in as root, so there is no sudo step and no second account.
 
-**Preferred — SSH from a machine that can already reach Tav-Serv:**
+**Preferred — from a machine that can already reach tav-serv:**
 ```bash
 cat ssh_keys/ansible_control.pub | \
-    ssh tavaresm1@tav-serv 'cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+    ssh root@tav-serv 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
 ```
 
-**If you can only reach Tav-Serv from a different machine than this one:**
-- Copy `ansible_control.pub` to that machine (email, scp, USB, whatever)
-- On that machine, `cat ansible_control.pub >> ~/.ssh/authorized_keys` for
-  the `tavaresm1` user
+**If SSH isn't working yet:** use the PVE web UI at `https://tav-serv:8006` →
+select the node → **Shell**. That is a root shell in the browser; paste the key
+in there.
 
-**If Tav-Serv is entirely unreachable** but you have iDRAC access at
-`192.168.0.120`:
-- Launch the virtual console
-- Log in as `tavaresm1` locally
-- Paste the pubkey contents into `~/.ssh/authorized_keys` by hand
-
-**If you're bootstrapping Tav-Serv from a fresh install:**
-- Same idea, but the file may not exist yet:
-  ```bash
-  mkdir -p ~/.ssh && chmod 700 ~/.ssh
-  cat >> ~/.ssh/authorized_keys   # paste pubkey, Ctrl-D
-  chmod 600 ~/.ssh/authorized_keys
-  ```
+**If the box is unreachable on the network entirely:** iDRAC at
+`192.168.0.120` → virtual console → log in as root → same paste.
 
 ### Step 4 — build the image
 
@@ -97,56 +109,59 @@ cat ssh_keys/ansible_control.pub | \
 docker compose build
 ```
 
-This produces `tav_lab_ansible:latest` locally. Takes ~2 minutes on first
-build (Alpine + Ansible + collections).
+Produces `tav_lab_ansible:latest`. The build context is the repo root so the
+image can bake in `ansible/requirements.yml` — the collections (including
+`community.proxmox` and `vitabaks.autobase`) are installed at build time, not
+per-run.
 
 ### Step 5 — sanity check
 
-Trust the SSH host key on first connection and confirm the container can
-reach Tav-Serv:
+```bash
+docker compose run --rm ansible \
+    ssh -o StrictHostKeyChecking=accept-new root@tav-serv hostname
+```
+
+Expected output: `tav-serv`
+
+Then the Ansible ping:
 
 ```bash
 docker compose run --rm ansible \
-    ssh -o StrictHostKeyChecking=accept-new tavaresm1@100.80.216.116 hostname
+    ansible -i inventory/hosts.ini proxmox -m ping
 ```
 
-Expected output: `Tav-Serv`
-
-Then run the Ansible ping:
-
-```bash
-docker compose run --rm ansible \
-    ansible -i inventory/hosts.ini all -m ping
-```
-
-Expected output:
+Expected:
 ```
 tav-serv | SUCCESS => { ... "ping": "pong" ... }
 ```
 
-If either fails, jump to **Troubleshooting** below.
+The guests will not answer until they exist — that's what the Autobase playbook
+builds. Use `-m ping` against `proxmox` only until then.
+
+If either fails, jump to **Troubleshooting**.
 
 ### Step 6 — apply
 
-Dry-run first to see what would change:
+Host baseline first, dry-run:
 
 ```bash
 docker compose run --rm ansible \
-    ansible-playbook -i inventory/hosts.ini site.yml --check --diff
+    ansible-playbook playbooks/proxmox-host.yml --check --diff
 ```
 
-Then real apply:
+Then the platform. Read [../docs/autobase.md](../docs/autobase.md) §1 first —
+the playbook refuses to run until the Step 0 discovery values are confirmed:
 
 ```bash
 docker compose run --rm ansible \
-    ansible-playbook -i inventory/hosts.ini site.yml
+    ansible-playbook playbooks/autobase.yml --ask-vault-pass
 ```
 
-By tag:
+Everything at once (`site.yml` imports both):
 
 ```bash
 docker compose run --rm ansible \
-    ansible-playbook -i inventory/hosts.ini site.yml --tags base
+    ansible-playbook site.yml --ask-vault-pass
 ```
 
 Interactive shell inside the container:
@@ -159,87 +174,79 @@ docker compose run --rm ansible bash
 
 ## Platform notes
 
-### Linux (native Docker Engine)
-
-Works as-is. `network_mode: host` in `docker-compose.yml` gives the container
-direct access to the host's Tailscale interface, so `100.80.216.116` is
-reachable without further plumbing.
-
 ### Windows — Docker Desktop
 
 Docker Desktop 4.34+ supports host networking, but it's **opt-in**:
 
 1. Docker Desktop → Settings → Resources → Network → tick **"Enable host
    networking"** → Apply & Restart
-2. Ensure Tailscale is installed and up on Windows (so `100.80.216.116` is
-   routable from the host)
+2. Ensure Tailscale is installed and up on Windows, so `tav-serv` resolves and
+   routes from the host
 
-If host networking is unavailable or you'd rather not enable it, edit
-`docker-compose.yml`: comment out `network_mode: host` and the container
-will use the default bridge network. Docker Desktop's default bridge routes
-outbound traffic through the host, so Tailscale-connected IPs are still
-reachable — just slightly slower and with an extra NAT hop.
-
-### macOS — Docker Desktop
-
-Same as Windows. Enable host networking in Docker Desktop settings, or
-accept the bridge fallback. Tailscale must be installed on the Mac itself.
+If host networking is unavailable or you'd rather not enable it, comment out
+`network_mode: host` in `docker-compose.yml`. The default bridge routes outbound
+traffic through the host, so tailnet peers stay reachable — one extra NAT hop.
 
 ### WSL2
 
-Works either through Docker Desktop's WSL integration or a native Docker
-install inside the WSL distro. If Tailscale is running on the Windows side
-only, WSL2 traffic still transits the host so Tav-Serv is reachable. If
-Tailscale is running inside WSL, use that instance directly.
+Works through Docker Desktop's WSL integration or a native Docker install inside
+the distro. If Tailscale runs on the Windows side only, WSL2 traffic still
+transits the host, so tav-serv is reachable. If Tailscale runs inside WSL, use
+that instance directly.
 
-### Running the control node ON Tav-Serv itself
+### Linux (native Docker Engine)
 
-Legitimate for a homelab: run the container on Tav-Serv, targeting Tav-Serv
-over SSH via `100.80.216.116` (Tailscale) or `127.0.0.1` (localhost).
-Chicken-and-egg only matters if Tav-Serv itself is down, which is when the
-control node is useless anyway — no target to manage.
+Works as-is. `network_mode: host` gives the container the host's Tailscale
+interface directly.
+
+### macOS — Docker Desktop
+
+Same as Windows. Enable host networking, or accept the bridge fallback.
+Tailscale must be installed on the Mac itself.
 
 ---
 
 ## Troubleshooting
 
-**`ssh: connect to host 100.80.216.116 port 22: Connection timed out`**
-- Tailscale is not running on the host, or the container isn't inheriting
-  the host's Tailscale connection.
-- On Linux: verify `tailscale status` on the host shows Tav-Serv.
-- On Docker Desktop: check that host networking is enabled *and*
-  Tailscale is running.
-- Fallback: swap `100.80.216.116` in `inventory/hosts.ini` for the LAN IP
-  of Tav-Serv, if you have LAN reachability.
+**`ssh: connect to host tav-serv port 22: Connection timed out`**
+- Tailscale isn't up on the workstation, or the container isn't inheriting the
+  host's Tailscale connection.
+- Verify `tailscale status` on the workstation lists tav-serv.
+- On Docker Desktop: confirm host networking is enabled *and* Tailscale is
+  running.
+- Fallback: set `ansible_host` to tav-serv's LAN IP in `inventory/hosts.ini` if
+  you're on the same LAN.
+
+**`nslookup tav-serv` returns `Non-existent domain`**
+- The workstation's DNS resolver flipped to the MathWorks corporate resolver
+  (`10.90.12.16`) under a VPN state, displacing the MagicDNS override.
+  Reconnect Tailscale. See `../docs/context/tailscale-topology.md`.
 
 **`Permission denied (publickey)`**
-- The pubkey from step 2 was never installed into
-  `tavaresm1@tav-serv:~/.ssh/authorized_keys`.
-- Test from the host directly:
-  `ssh -i ssh_keys/ansible_control tavaresm1@100.80.216.116 hostname`
-  and see if the same error appears — that isolates it to a key problem.
+- The step 3 pubkey never landed in `root@tav-serv:/root/.ssh/authorized_keys`.
+- Isolate it from the host: `ssh -i ssh_keys/ansible_control root@tav-serv hostname`.
+- PVE also ships `PermitRootLogin yes` with password auth — if key auth is the
+  only thing failing, the file or its permissions are wrong (`700` on `~/.ssh`,
+  `600` on `authorized_keys`).
 
-**`Missing sudo password` during playbook apply**
-- Tav-Serv doesn't have the NOPASSWD sudo grant yet. On Tav-Serv, run:
-  ```bash
-  echo 'tavaresm1 ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/90-tavaresm1-nopasswd
-  sudo chmod 440 /etc/sudoers.d/90-tavaresm1-nopasswd
-  ```
+**`Missing sudo password`**
+- Shouldn't happen against tav-serv: the connection is already root. If you see
+  it, the play is targeting a *guest*, where the `ansible` user's NOPASSWD grant
+  comes from `roles/guest_baseline` — so run `--tags baseline` first.
+
+**`ERROR! couldn't resolve module/action 'community.proxmox.proxmox_kvm'`**
+- The image predates `ansible/requirements.yml` gaining that collection.
+  `docker compose build --no-cache`.
 
 **Container can't clone the repo (`fatal: unable to access ...`)**
 - Host has no internet, or `REPO_URL` is unreachable.
-- If cloning from a fork or private repo, set `REPO_URL` in
-  `docker-compose.yml` and mount a github.com SSH key at
-  `/home/ansible/.ssh/id_ed25519_github`, then adjust the entrypoint.
-
-**`fatal: [tav-serv]: FAILED! => ... /usr/bin/python3 not found`**
-- Tav-Serv is missing python3 — vanishingly rare on Mint 22.3, but fixable
-  with `ssh tavaresm1@tav-serv "sudo apt install -y python3"`.
+- For a fork or private repo, set `REPO_URL` in `docker-compose.yml` and mount a
+  github.com SSH key, then adjust the entrypoint.
 
 **Line-ending errors on `entrypoint.sh`** (`bad interpreter: /usr/bin/env`)
-- Git converted LF → CRLF on Windows. `.gitattributes` in this repo pins
-  shell scripts to LF, so a fresh clone should be clean. If yours isn't,
-  re-clone or run `git checkout --renormalize entrypoint.sh`.
+- Git converted LF → CRLF on Windows. `.gitattributes` pins shell scripts to LF,
+  so a fresh clone should be clean. Otherwise:
+  `git checkout --renormalize entrypoint.sh`.
 
 ---
 
@@ -247,16 +254,15 @@ control node is useless anyway — no target to manage.
 
 ```
 control-node/
-  Dockerfile             Alpine + Ansible + git + openssh-client
+  Dockerfile             Alpine + Ansible + collections + git + openssh-client
   entrypoint.sh          Clones/pulls Tav_Lab on start, then execs CMD
-  docker-compose.yml     Host networking + SSH key mount + repo cache
-  ssh_keys/              (gitignored) Generated ed25519 keypair for Tav-Serv
+  docker-compose.yml     Host networking + two SSH key mounts + repo cache
+  ssh_keys/              (gitignored) ansible_control + autobase keypairs
 ```
 
-The `ssh_keys/` directory is **not** in the repo — each control-node host
-generates its own keypair. Different hosts can have different pubkeys
-authorized on Tav-Serv, and any of them can be revoked independently by
-removing the line from `authorized_keys`.
+`ssh_keys/` is **not** in the repo — each control-node host generates its own.
+Different hosts can hold different pubkeys authorized on tav-serv, and any of
+them can be revoked on its own by deleting the line from `authorized_keys`.
 
 ---
 
@@ -267,7 +273,7 @@ Force a fresh repo clone inside the container:
 docker volume rm control-node_repo_cache
 ```
 
-Rebuild the image after a Dockerfile change:
+Rebuild after a Dockerfile or requirements change:
 ```bash
 docker compose build --no-cache
 ```

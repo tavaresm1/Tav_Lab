@@ -13,14 +13,13 @@ guest_firewall_tcp_ports:
 guest_unattended_upgrades: true
 
 # --- Overrides for the shared roles --------------------------------------
-# group_vars/all.yml sets these for Tav-Serv and they are wrong here:
+# group_vars/all.yml defines no docker_users at all, and its tailscale_up_flags
+# are written for tav-serv:
 #
-#   docker_users: [tavaresm1]  -> that account does not exist on this guest,
-#                                 so the user module would fail outright.
 #   tailscale_up_flags: [--ssh, --advertise-routes=192.168.0.0/24,
 #                        --accept-routes]
 #                              -> a DB console has no business advertising the
-#                                 LAN subnet; pve already does that.
+#                                 LAN subnet; tav-serv is the subnet router.
 docker_users:
   - "{{ autobase_ci_user }}"
 
@@ -32,6 +31,3 @@ tailscale_up_flags:
 # vault_tailscale_authkey; roles/tailscale hides the task under no_log whenever
 # this is non-empty. Leave it empty to log in by hand instead.
 tailscale_authkey: "{{ vault_tailscale_authkey | default('') }}"
-
-# Cockpit is a Tav-Serv concern; nothing here needs it.
-cockpit_enabled: false

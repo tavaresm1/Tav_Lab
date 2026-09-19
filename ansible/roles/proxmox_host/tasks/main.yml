@@ -1,0 +1,76 @@
+---
+# Baseline for tav-serv as a Proxmox VE node.
+#
+# This role replaces what `roles/base` + `roles/monitoring` did when the box ran
+# Mint. What did NOT survive the rebuild, and why:
+#   - Mint/Docker/Tailscale apt sources  -> PVE has its own; the Docker and
+#     Tailscale repos now live in their own roles, used by the guests.
+#   - Openbox/LXDE cleanup               -> no desktop on a hypervisor.
+#   - 8 GB swapfile                      -> PVE manages swap on LVM at install.
+#   - Cockpit                            -> PVE's own UI is on :8006.
+#   - unattended-upgrades                -> see defaults/main.yml.
+# smartd survived: the PERC H700 disks still need watching.
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ timezone }}"
+  tags: [proxmox_host]
+
+- name: Apt update
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [proxmox_host]
+
+# No `upgrade:` here on purpose — package installs are additive, but upgrading a
+# PVE node is a deliberate, guests-drained operation, not a side effect of a
+# baseline run.
+- name: Install host utilities
+  ansible.builtin.apt:
+    name: "{{ proxmox_host_packages + proxmox_host_hardware_packages }}"
+    state: present
+  tags: [proxmox_host]
+
+- name: Sysctl settings
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-tav-serv.conf
+    reload: true
+  loop: "{{ sysctl_settings | default({}) | dict2items }}"
+  tags: [proxmox_host, sysctl]
+
+# -------- SMART monitoring --------
+- name: Deploy smartd.conf
+  ansible.builtin.copy:
+    dest: /etc/smartd.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible. Do not edit by hand.
+      DEVICESCAN -d removable -n standby -m root -M exec /usr/share/smartmontools/smartd-runner
+      {% for id in smartd_megaraid_devices %}
+      /dev/sda -d megaraid,{{ id }} -a -o on -S on -s (S/../.././02|L/../../6/03) -m root
+      {% endfor %}
+  when: smartd_enabled | default(true)
+  notify: restart smartd
+  tags: [proxmox_host, smart]
+
+- name: Enable + start smartd
+  ansible.builtin.systemd:
+    name: smartd
+    enabled: true
+    state: started
+  when: smartd_enabled | default(true)
+  tags: [proxmox_host, smart]
+
+- name: Report what PVE thinks it is
+  ansible.builtin.debug:
+    msg: >-
+      {{ ansible_hostname }} — {{ ansible_distribution }}
+      {{ ansible_distribution_version }}, kernel {{ ansible_kernel }},
+      {{ ansible_processor_vcpus }} vCPU, {{ ansible_memtotal_mb }} MB RAM.
+      pve_node is set to '{{ pve_node }}' — it must match the node name PVE
+      itself uses (`pvesh get /nodes --output-format json`), which is normally
+      the short hostname.
+  tags: [proxmox_host]

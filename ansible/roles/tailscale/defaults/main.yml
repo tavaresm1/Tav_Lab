@@ -1,5 +1,7 @@
 ---
-# Tailscale's apt repo is keyed on Ubuntu codenames. Mint reports its own
-# ("zena", "xia", ...) and has no repo of its own, so it maps to the Ubuntu
-# release it is built on. Ubuntu hosts report the right codename already.
+# Tailscale publishes a separate apt repo per distro and per codename. Two
+# families are in scope now: tav-serv is Debian (Proxmox VE 9 / trixie) and the
+# Autobase guests are Ubuntu. Mint has no repo of its own, so it maps to the
+# Ubuntu release it is built on.
+tailscale_apt_distro: "{{ 'ubuntu' if ansible_distribution in ['Ubuntu', 'Linux Mint'] else 'debian' }}"
 tailscale_apt_codename: "{{ 'noble' if ansible_distribution == 'Linux Mint' else ansible_distribution_release }}"

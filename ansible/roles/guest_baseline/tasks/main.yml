@@ -1,9 +1,10 @@
 ---
 # Baseline for the Ubuntu 24.04 platform guests.
 #
-# roles/base is deliberately NOT reused here: it is written for Mint on bare
-# metal (swapfile sizing, Openbox cleanup, ipmitool/smartmontools/lm-sensors),
-# none of which belongs in a VM. This role covers only what the guests need.
+# There is deliberately no baseline role shared with the hypervisor:
+# roles/proxmox_host handles Debian on bare metal (ipmitool, smartmontools,
+# lm-sensors, sysctl for the subnet router) and none of that belongs in a VM.
+# This role covers only what the guests need.
 
 - name: Set hostname
   ansible.builtin.hostname:
