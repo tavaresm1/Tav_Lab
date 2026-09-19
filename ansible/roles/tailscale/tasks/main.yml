@@ -68,6 +68,39 @@
   no_log: "{{ (tailscale_authkey | default('') | length) > 0 }}"
   tags: [tailscale]
 
+# `--check` cannot preview either of the two tasks above: ansible.builtin.command
+# is not check-mode capable, so Ansible skips it rather than guess at the effect.
+# check_mode: false on the read-only query above is not enough to change that. So
+# read the current prefs and print the comparison ourselves — otherwise a dry run
+# is silent about Tailscale and you find out what changed only after applying.
+- name: Read current tailscale prefs
+  ansible.builtin.command: tailscale debug prefs
+  register: ts_prefs
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: tailscale_enabled | default(true)
+  tags: [tailscale]
+
+- name: Report what tailscale set would apply
+  ansible.builtin.debug:
+    msg:
+      - "desired flags: {{ tailscale_up_flags | join(' ') }}"
+      - "current AdvertiseRoutes: {{ (ts_prefs.stdout | from_json).AdvertiseRoutes | default('none') }}"
+      - "current RouteAll (--accept-routes): {{ (ts_prefs.stdout | from_json).RouteAll | default(false) }}"
+      - "current RunSSH (--ssh): {{ (ts_prefs.stdout | from_json).RunSSH | default(false) }}"
+      - "current Hostname: {{ (ts_prefs.stdout | from_json).Hostname | default('(default)') }}"
+  when:
+    - tailscale_enabled | default(true)
+    - ts_prefs.stdout is defined
+    - ts_prefs.stdout | length > 0
+  tags: [tailscale]
+
+# Always runs when logged in: `tailscale set` is itself idempotent and cheap, but
+# that means this task reports "changed" on every run. Comparing tailscale_up_flags
+# (a free-form flag list) against the structured prefs JSON to derive a real
+# changed_when would mean reshaping the flag model — not worth it for cosmetics.
+# The task above is where you look to see whether anything actually differs.
 - name: Apply tailscale flag drift (set)
   ansible.builtin.command: "tailscale set {{ tailscale_up_flags | join(' ') }}"
   when:
