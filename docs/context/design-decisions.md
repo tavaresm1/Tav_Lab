@@ -110,6 +110,85 @@ for flag drift.
 generates auth prompts and log churn. `tailscale set` is designed for
 idempotent flag updates on an already-authenticated node.
 
+## Autobase guests: Ansible + community.proxmox, not Terraform
+
+**Choice:** The four Ubuntu guests backing the Autobase platform are declared
+in `group_vars/autobase.yml` and built by `roles/proxmox_guests` using
+`community.proxmox.proxmox_kvm`, not Terraform's `bpg/proxmox` provider.
+
+**Reasoning:** Consistent with the "Ansible over Terraform for VMs" decision
+above — still one host, one operator. Terraform would genuinely be better at
+repeatable cloud-init clones (real state, drift detection), but it costs a
+second toolchain for four VMs.
+
+**Trade-off accepted:** No state file means no drift detection. The role
+compensates where it matters: `update: true` reapplies sizing and cloud-init on
+every run, and `proxmox_disk` reconciles disk size. Nothing reconciles NIC or
+storage changes — those stay manual, same as the VBox role.
+
+**Note:** The Proxmox modules were migrated out of `community.general` and
+removed from it in 11.0.0. `community.general.proxmox_kvm` no longer resolves;
+the FQCN is `community.proxmox.proxmox_kvm`. Pinned in
+`ansible/requirements.yml`.
+
+## Cloud-init template built with `qm`, guests built over the API
+
+**Choice:** `roles/proxmox_template` shells out to `qm` on the node;
+`roles/proxmox_guests` talks to the PVE REST API from the control node.
+
+**Reasoning:** `qm importdisk` has no module equivalent — a downloaded qcow2 has
+to be imported through the CLI, on the node. Everything after that (clone,
+config, resize, start) is a clean API operation. The template role reads the
+imported volume ID back out of `qm config` rather than constructing it, because
+the volid format differs by storage backend (`local-lvm:vm-8000-disk-0` vs
+`local:8000/vm-8000-disk-0.qcow2`).
+
+**Trade-off accepted:** Two credential paths — an SSH key for the node and an
+API token for the modules.
+
+## Autobase console compose fetched at a pinned tag, not vendored inline
+
+**Choice:** `roles/autobase_console` pulls upstream's `console/docker-compose.yml`
+at tag `{{ autobase_console_version }}`, breaking the `docker_stacks`
+inline-compose convention above.
+
+**Reasoning:** It is a four-service file that upstream maintains and version-bumps.
+Vendoring it inline means hand-merging every release; fetching it at a tag makes
+an upgrade a one-variable change. This is the split the `docker_stacks` decision
+already anticipated, arriving earlier than the ~5-10 stack mark because of the
+file's size and provenance rather than the stack count.
+
+**Trade-off accepted:** The compose content is not visible in this repo, and a
+run needs network access to raw.githubusercontent.com.
+
+## Ubuntu 24.04 LTS for the Autobase guests, not Rocky 10
+
+**Choice:** All four platform guests run Ubuntu Server 24.04 LTS.
+
+**Reasoning:** Rocky 10 was the original choice and did not boot on `pve`. RHEL 10
+and its rebuilds raised the baseline to `x86-64-v3` (AVX2, BMI2, FMA, Haswell and
+later); the kernel refuses to start on older silicon or under a VM CPU type that
+masks those flags, and it does so before anything reaches a console. Ubuntu 24.04
+still targets `x86-64-v2`, so it runs on the same hardware unchanged. Autobase's
+CI tests Ubuntu 24.04 daily, so nothing is lost on the support side.
+
+Rocky **9** is also `x86-64-v2` and would most likely have booted, but Ubuntu
+keeps the whole platform on one package idiom as PVE itself and removes the second
+`dnf`/`apt` code path from the roles.
+
+**Trade-off accepted:** The `base` role is still Mint-specific (swapfile sizing,
+Openbox cleanup, hardware packages) so it is not reused on the guests —
+`roles/guest_baseline` is the apt-based platform equivalent. The Docker and
+Tailscale apt repos moved out of `base` and into `roles/docker` and
+`roles/tailscale` so those roles stand alone on hosts that never run `base`; each
+maps a distribution codename through a role default, because Mint reports its own
+codename and neither vendor publishes a Mint repo.
+
+**Not applicable any more:** with Ubuntu there is no SELinux, so the earlier
+decision to keep it `Enforcing` while disabling Docker's labelling is moot.
+AppArmor is left at its Ubuntu default; Docker ships its own profile and the
+Console's `/var/run/docker.sock` bind-mount needs no extra handling.
+
 ## Not tracked in this repo
 
 Deliberate scope exclusions:

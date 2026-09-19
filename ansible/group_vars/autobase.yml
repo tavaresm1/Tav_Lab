@@ -1,0 +1,129 @@
+---
+# ============================================================================
+# Autobase platform configuration — the ONE file to edit.
+#
+# Applies to the [autobase] group: the pve hypervisor plus every Ubuntu guest.
+# Runbook: docs/autobase.md
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# FILL IN from Step 0 discovery (see docs/autobase.md §1). Every value below
+# is a placeholder inferred from the old Tav-Serv LAN — confirm each one
+# against the live host before the first run. The preflight asserts in
+# playbooks/autobase.yml will stop the run if these are left at defaults
+# while autobase_preflight_confirmed is false.
+# ----------------------------------------------------------------------------
+
+# Set to true once you have verified every value in this block.
+autobase_preflight_confirmed: false
+
+# --- Proxmox node ---
+pve_node: pve                     # `pvesh get /nodes` — the node NAME, not the DNS name
+pve_api_host: pve                 # host:8006 the API is reached on
+pve_storage: local-lvm            # `pvesm status` — must have ~180 GB free
+pve_bridge: vmbr0                 # `ip -br addr` / /etc/network/interfaces
+pve_api_user: ansible@pve
+pve_api_token_id: automation
+pve_api_validate_certs: false     # PVE ships a self-signed cert
+
+# --- Network ---
+autobase_subnet_cidr: 192.168.0.0/24
+autobase_subnet_prefix: 24
+autobase_gateway: 192.168.0.1
+autobase_nameservers:
+  - 192.168.0.1
+autobase_searchdomains:
+  - lan
+
+# The single client entry point, owned by vip-manager and moved on failover.
+# MUST be currently unused and outside the DHCP pool — Autobase validates this
+# at deploy time and assigns it after the cluster is up.
+autobase_cluster_vip: 192.168.0.40
+
+# --- Guests ---
+# Single source of truth for VMIDs, sizing and addressing. Keys match
+# inventory_hostname in [autobase_guests]; group_vars/autobase_guests.yml
+# derives ansible_host from the `ip` field here.
+#
+# RAM budget: 2048 + (3 x 2560) = 9728 MB resident.
+# balloon: 0 disables the balloon driver. Left off on the DB nodes on purpose —
+# reclaiming pages from under shared_buffers produces latency cliffs that look
+# like Postgres faults. The console can balloon freely.
+autobase_guests:
+  autobase-console:
+    vmid: 8010
+    cores: 2
+    memory: 2048
+    balloon: 512
+    disk_gb: 32
+    ip: 192.168.0.30
+  pgnode01:
+    vmid: 8001
+    cores: 2
+    memory: 2560
+    balloon: 0
+    disk_gb: 40
+    ip: 192.168.0.41
+  pgnode02:
+    vmid: 8002
+    cores: 2
+    memory: 2560
+    balloon: 0
+    disk_gb: 40
+    ip: 192.168.0.42
+  pgnode03:
+    vmid: 8003
+    cores: 2
+    memory: 2560
+    balloon: 0
+    disk_gb: 40
+    ip: 192.168.0.43
+
+# ----------------------------------------------------------------------------
+# Cloud-init template (built once on pve by roles/proxmox_template)
+# ----------------------------------------------------------------------------
+pve_template_vmid: 8000
+pve_template_name: ubuntu2404-cloudinit
+pve_image_cache_dir: /var/lib/vz/template/iso
+
+# Ubuntu 24.04 LTS, not Rocky 10: RHEL 10 and its rebuilds require an
+# x86-64-v3 CPU baseline (AVX2/BMI2/FMA) and will not boot on a pre-Haswell
+# host or under a VM CPU type that masks those flags. Ubuntu 24.04 still runs
+# on x86-64-v2. Autobase's CI tests Ubuntu 24.04 daily.
+#
+# Verified present 2026-09-18. The `releases/` path is the published release
+# artifact (currently the latest 24.04 point release).
+guest_image_url: >-
+  https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img
+
+# ----------------------------------------------------------------------------
+# Guest login. Autobase needs root or a NOPASSWD-sudo user over SSH; this is
+# the account both our playbooks and the Console use.
+# ----------------------------------------------------------------------------
+autobase_ci_user: ansible
+
+# Public half of the key the Console hands to Autobase. Injected by cloud-init.
+# Generate on the control node, then paste the .pub here:
+#   ssh-keygen -t ed25519 -f ./ssh_keys/autobase -C "autobase@pve"
+autobase_ssh_pubkey: "ssh-ed25519 AAAA_REPLACE_ME autobase@pve"
+
+# ----------------------------------------------------------------------------
+# Autobase Console
+# ----------------------------------------------------------------------------
+autobase_console_version: "2.11.0"
+autobase_console_dir: /opt/autobase/console
+
+# Serve the UI over the tailnet instead of exposing :80 to the LAN.
+autobase_console_tailscale_serve: true
+
+# ----------------------------------------------------------------------------
+# Ports the cluster needs between DB nodes. Only enforced if you flip
+# guest_firewall_enabled to true, in which case ufw restricts them to
+# autobase_subnet_cidr. Add 5000-5003 and 7000 if you later enable HAProxy.
+# ----------------------------------------------------------------------------
+autobase_cluster_ports:
+  - 5432    # PostgreSQL
+  - 6432    # PgBouncer
+  - 8008    # Patroni REST API
+  - 2379    # etcd client
+  - 2380    # etcd peer

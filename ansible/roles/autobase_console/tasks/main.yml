@@ -1,0 +1,90 @@
+---
+# The Autobase Console stack: console_ui, console_api, console_db and
+# dbdesk-studio, plus the sibling autobase/automation containers the API spawns
+# through the Docker socket.
+#
+# Deliberate deviation from the repo's docker_stacks convention (inline compose
+# strings in host_vars): this is a 4-service file that upstream maintains and
+# version-bumps, so vendoring it inline means hand-merging every release.
+# Fetching it at a pinned tag keeps upgrades to an autobase_console_version
+# change. docs/context/design-decisions.md already anticipates the split at the
+# ~5-10 stack mark.
+
+- name: Ensure the console directory exists
+  ansible.builtin.file:
+    path: "{{ autobase_console_dir }}"
+    state: directory
+    owner: root
+    group: docker
+    mode: "0750"
+  tags: [console]
+
+- name: Fetch the pinned upstream compose file
+  ansible.builtin.get_url:
+    url: >-
+      https://raw.githubusercontent.com/autobase-tech/autobase/{{ autobase_console_version }}/console/docker-compose.yml
+    dest: "{{ autobase_console_dir }}/docker-compose.yml"
+    owner: root
+    group: docker
+    mode: "0640"
+    force: true
+  register: autobase_compose
+  tags: [console]
+
+- name: Write the console .env
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ autobase_console_dir }}/.env"
+    owner: root
+    group: docker
+    mode: "0640"
+  register: autobase_env
+  no_log: true
+  tags: [console]
+
+- name: Bring the console stack up
+  community.docker.docker_compose_v2:
+    project_src: "{{ autobase_console_dir }}"
+    state: present
+    pull: missing
+    remove_orphans: true
+  register: autobase_stack
+  tags: [console]
+
+- name: Wait for the Console UI to answer
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:80/"
+    status_code: [200, 301, 302]
+  register: autobase_ui
+  retries: 30
+  delay: 5
+  until: autobase_ui is succeeded
+  tags: [console]
+
+# Serve the UI over the tailnet rather than exposing :80 on the LAN. Tailscale
+# terminates TLS with a cert for the tailnet name, so there is no Caddy variant
+# and no public DNS record to maintain.
+- name: Check existing tailscale serve config
+  ansible.builtin.command: tailscale serve status
+  register: ts_serve
+  changed_when: false
+  failed_when: false
+  when: autobase_console_tailscale_serve | default(false)
+  tags: [console, net]
+
+- name: Publish the Console over tailscale serve
+  ansible.builtin.command: tailscale serve --bg --https=443 http://127.0.0.1:80
+  when:
+    - autobase_console_tailscale_serve | default(false)
+    - ts_serve.stdout is defined
+    - "'127.0.0.1:80' not in ts_serve.stdout"
+  changed_when: true
+  tags: [console, net]
+
+- name: Report how to reach the Console
+  ansible.builtin.debug:
+    msg: >-
+      Console up. Tailnet: https://autobase (sign in with the AUTH_TOKEN from
+      group_vars/all.vault.yml). LAN fallback:
+      http://{{ autobase_guests[inventory_hostname].ip }}/
+  tags: [console]

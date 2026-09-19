@@ -1,0 +1,107 @@
+---
+# Autobase platform on pve. Runbook: docs/autobase.md
+#
+#   ansible-playbook playbooks/autobase.yml --ask-vault-pass
+#
+# Slices:
+#   --tags template   build the Ubuntu 24.04 cloud-init template only
+#   --tags guests     clone / resize / start the four VMs
+#   --tags baseline   packages, hostnames, sudo (and ufw, if enabled) on the guests
+#   --tags console    Docker + Tailscale + the Console stack
+#
+# This playbook stops at prepared guests on purpose. The Postgres clusters
+# themselves are created from the Console UI (or the vitabaks.autobase
+# collection) — that is Autobase's job, not ours.
+
+- name: Preflight checks on pve
+  hosts: proxmox
+  become: true
+  gather_facts: true
+  tags: always
+
+  tasks:
+    - name: Require the Step 0 discovery values to have been confirmed
+      ansible.builtin.assert:
+        that: autobase_preflight_confirmed | bool
+        fail_msg: >-
+          group_vars/autobase.yml still holds placeholder values. Work through
+          docs/autobase.md §1, correct pve_node / pve_storage / pve_bridge, the
+          subnet and every IP, then set autobase_preflight_confirmed: true.
+
+    - name: Require an SSH public key for the guests
+      ansible.builtin.assert:
+        that: "'REPLACE_ME' not in autobase_ssh_pubkey"
+        fail_msg: >-
+          autobase_ssh_pubkey is still the placeholder. Generate the pair
+          (ssh-keygen -t ed25519 -f ./ssh_keys/autobase) and paste the .pub
+          into group_vars/autobase.yml — cloud-init injects it, and it is the
+          key you hand the Console later.
+
+    - name: Require the vault secrets
+      ansible.builtin.assert:
+        that:
+          - vault_proxmox_api_token_secret | default('') | length > 0
+          - vault_autobase_auth_token | default('') | length > 0
+        fail_msg: >-
+          Missing secrets. Run:
+          ansible-vault edit group_vars/all.vault.yml
+          and set vault_proxmox_api_token_secret and vault_autobase_auth_token.
+
+    - name: Confirm the requested storage exists on this node
+      ansible.builtin.command: "pvesm status --storage {{ pve_storage }}"
+      register: pve_storage_check
+      changed_when: false
+      failed_when: pve_storage_check.rc != 0
+
+    # Autobase validates this itself at deploy time, but finding out now beats
+    # finding out ten minutes into a cluster build.
+    - name: Confirm the cluster VIP is unused
+      ansible.builtin.command: "ping -c 2 -W 1 {{ autobase_cluster_vip }}"
+      register: vip_ping
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if something already answers on the VIP
+      ansible.builtin.assert:
+        that: vip_ping.rc != 0
+        fail_msg: >-
+          {{ autobase_cluster_vip }} answers ping, so it is not free.
+          vip-manager needs an address nothing else owns, and it must sit
+          outside the DHCP pool. Pick another and update autobase_cluster_vip.
+
+    - name: Report free memory against the platform's budget
+      ansible.builtin.debug:
+        msg: >-
+          pve has {{ ansible_memfree_mb }} MB free of {{ ansible_memtotal_mb }} MB.
+          This platform wants
+          {{ autobase_guests.values() | map(attribute='memory') | sum }} MB resident.
+
+- name: Build the Ubuntu cloud-init template
+  hosts: proxmox
+  become: true
+  gather_facts: false
+  roles:
+    - { role: proxmox_template, tags: [template] }
+
+- name: Provision the Autobase guests
+  hosts: proxmox
+  become: true
+  gather_facts: false
+  roles:
+    - { role: proxmox_guests, tags: [guests] }
+
+- name: Baseline the Ubuntu guests
+  hosts: autobase_guests
+  become: true
+  gather_facts: true
+  roles:
+    - { role: guest_baseline, tags: [baseline] }
+
+- name: Deploy the Autobase Console
+  hosts: autobase_console
+  become: true
+  gather_facts: true
+  roles:
+    - { role: docker, tags: [console, docker] }
+    - { role: tailscale, tags: [console, net] }
+    - { role: autobase_console, tags: [console] }

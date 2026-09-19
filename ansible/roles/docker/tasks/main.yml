@@ -1,4 +1,39 @@
 ---
+# Docker CE. The apt repo is set up here rather than in roles/base, so the role
+# is self-contained: the Ubuntu platform guests need Docker without inheriting
+# base's Mint-on-bare-metal assumptions.
+
+- name: Ensure /etc/apt/keyrings exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+  when: docker_enabled | default(true)
+  tags: [docker, docker-repo]
+
+- name: Docker GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+    force: false
+  when: docker_enabled | default(true)
+  tags: [docker, docker-repo]
+
+- name: Docker apt source
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ docker_apt_arch }}
+      signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu
+      {{ docker_apt_codename }}
+      stable
+    filename: docker
+    state: present
+    update_cache: true
+  when: docker_enabled | default(true)
+  tags: [docker, docker-repo]
+
 - name: Install Docker CE and plugins
   ansible.builtin.apt:
     name:

@@ -1,0 +1,26 @@
+---
+# Ansible content this repo's roles depend on.
+# Installed into ansible/collections/ (gitignored) by the control-node image:
+#   ansible-galaxy collection install -r ansible/requirements.yml
+collections:
+  - name: ansible.posix
+    version: ">=1.5.4,<3.0.0"
+
+  - name: community.general
+    version: ">=10.0.0,<12.0.0"
+
+  - name: community.docker
+    version: ">=3.13.0,<5.0.0"
+
+  # The Proxmox modules were migrated OUT of community.general into their own
+  # collection and removed from community.general in 11.0.0. proxmox_kvm and
+  # proxmox_disk must be addressed as community.proxmox.* — the old
+  # community.general.proxmox_kvm FQCN no longer resolves.
+  - name: community.proxmox
+    version: ">=1.2.0,<3.0.0"
+
+  # Autobase's Ansible layer. The Community Console covers cluster *creation*
+  # only; day-2 work (scale, backup, upgrade, switchover) runs from here.
+  # See docs/autobase.md.
+  - name: vitabaks.autobase
+    version: "2.11.0"

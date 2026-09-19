@@ -1,0 +1,124 @@
+---
+# Clones the cloud-init template into the four Autobase guests.
+#
+# Runs in a play targeting [proxmox] so pve's vars are in scope, but the API
+# tasks are delegated to the control node — proxmox_kvm talks to the PVE REST
+# API, it does not need to run on the node.
+#
+# FQCN note: these modules were migrated out of community.general and REMOVED
+# from it in 11.0.0. community.proxmox.* is the only form that resolves now.
+
+- name: Inventory the VMIDs already on the node
+  ansible.builtin.command: qm list
+  register: pve_qm_list
+  changed_when: false
+  tags: [guests]
+
+- name: Collect existing VMIDs and their names
+  ansible.builtin.set_fact:
+    pve_existing_vmids: "{{ pve_qm_list.stdout | regex_findall('(?m)^\\s*(\\d+)') | map('int') | list }}"
+    pve_vm_names: "{{ dict(pve_qm_list.stdout | regex_findall('(?m)^\\s*(\\d+)\\s+(\\S+)')) }}"
+  tags: [guests]
+
+# Guard rail: if a VMID in autobase_guests is already taken by something else
+# (TrueNAS is 100, the Minecraft server has its own ID), the config and disk
+# tasks below would reconfigure and resize a live unrelated VM. Stop instead.
+- name: Refuse to touch a VMID that belongs to another guest
+  ansible.builtin.assert:
+    that: (pve_vm_names[item.value.vmid | string] | default(item.key)) == item.key
+    fail_msg: >-
+      VMID {{ item.value.vmid }} on {{ pve_node }} already belongs to
+      '{{ pve_vm_names[item.value.vmid | string] | default('?') }}', not
+      '{{ item.key }}'. Pick a free ID in group_vars/autobase.yml — check
+      `qm list` and `pct list` (CT and VM IDs share one namespace).
+  loop: "{{ autobase_guests | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} ({{ item.value.vmid }})"
+  tags: [guests]
+
+- name: Provision guests
+  delegate_to: localhost
+  become: false
+  tags: [guests]
+  module_defaults:
+    community.proxmox.proxmox_kvm: &pve_api
+      api_host: "{{ pve_api_host }}"
+      api_user: "{{ pve_api_user }}"
+      api_token_id: "{{ pve_api_token_id }}"
+      api_token_secret: "{{ vault_proxmox_api_token_secret }}"
+      validate_certs: "{{ pve_api_validate_certs }}"
+      node: "{{ pve_node }}"
+    community.proxmox.proxmox_disk: *pve_api
+  block:
+    # Skipped for guests that already exist, so a re-run never tries to clone
+    # over a live VM.
+    - name: Clone the template
+      community.proxmox.proxmox_kvm:
+        clone: "{{ pve_template_name }}"
+        vmid: "{{ pve_template_vmid }}"       # source
+        newid: "{{ item.value.vmid }}"        # target
+        name: "{{ item.key }}"
+        storage: "{{ pve_storage }}"
+        full: true
+        timeout: 600
+      loop: "{{ autobase_guests | dict2items }}"
+      loop_control:
+        label: "{{ item.key }} ({{ item.value.vmid }})"
+      when: item.value.vmid not in pve_existing_vmids
+
+    # Idempotent: update:true reapplies sizing and cloud-init on every run.
+    # net0 is inherited from the template and deliberately not touched — the
+    # module refuses NIC changes under update unless update_unsafe is set.
+    - name: Apply sizing and cloud-init configuration
+      community.proxmox.proxmox_kvm:
+        vmid: "{{ item.value.vmid }}"
+        name: "{{ item.key }}"
+        update: true
+        cores: "{{ item.value.cores }}"
+        sockets: 1
+        memory: "{{ item.value.memory }}"
+        balloon: "{{ item.value.balloon }}"
+        agent: "1"
+        onboot: true
+        citype: nocloud
+        ciuser: "{{ autobase_ci_user }}"
+        sshkeys: "{{ autobase_ssh_pubkey }}"
+        ipconfig:
+          ipconfig0: "ip={{ item.value.ip }}/{{ autobase_subnet_prefix }},gw={{ autobase_gateway }}"
+        nameservers: "{{ autobase_nameservers }}"
+        searchdomains: "{{ autobase_searchdomains }}"
+      loop: "{{ autobase_guests | dict2items }}"
+      loop_control:
+        label: "{{ item.key }} -> {{ item.value.ip }}"
+
+    # Before first boot, so cloud-init's growpart extends the root filesystem
+    # for us. The module no-ops when the size already matches; it can only
+    # grow, never shrink.
+    - name: Grow the root disk
+      community.proxmox.proxmox_disk:
+        vmid: "{{ item.value.vmid }}"
+        disk: scsi0
+        size: "{{ item.value.disk_gb }}G"
+        state: resized
+      loop: "{{ autobase_guests | dict2items }}"
+      loop_control:
+        label: "{{ item.key }} -> {{ item.value.disk_gb }}G"
+
+    - name: Start the guests
+      community.proxmox.proxmox_kvm:
+        vmid: "{{ item.value.vmid }}"
+        state: started
+        timeout: 300
+      loop: "{{ autobase_guests | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Wait for SSH on each guest
+      ansible.builtin.wait_for:
+        host: "{{ item.value.ip }}"
+        port: 22
+        timeout: 300
+        search_regex: OpenSSH
+      loop: "{{ autobase_guests | dict2items }}"
+      loop_control:
+        label: "{{ item.key }} ({{ item.value.ip }})"

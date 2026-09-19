@@ -1,0 +1,126 @@
+---
+# Builds the Ubuntu Server 24.04 LTS cloud-init template on pve, once.
+#
+# This role shells out to `qm` rather than using community.proxmox modules
+# because `qm importdisk` has no module equivalent — a qcow2 has to be imported
+# through the CLI on the node itself. Same precedent as roles/virtualization's
+# VBoxManage calls (see docs/context/design-decisions.md).
+#
+# The whole thing is guarded on `qm config <vmid>`, so a second run is a no-op.
+
+- name: Check whether the cloud-init template already exists
+  ansible.builtin.command: "qm config {{ pve_template_vmid }}"
+  register: pve_template_check
+  changed_when: false
+  failed_when: false
+  tags: [template]
+
+- name: Build the Ubuntu cloud-init template
+  when: pve_template_check.rc != 0
+  tags: [template]
+  block:
+    - name: Ensure the image cache directory exists
+      ansible.builtin.file:
+        path: "{{ pve_image_cache_dir }}"
+        state: directory
+        mode: "0755"
+
+    # The Ubuntu cloud image is named .img but is a qcow2 — importdisk reads the
+    # real format from the file header, so the extension is irrelevant.
+    - name: Download the Ubuntu cloud image
+      ansible.builtin.get_url:
+        url: "{{ guest_image_url }}"
+        dest: "{{ pve_image_cache_dir }}/{{ guest_image_url | trim | basename }}"
+        mode: "0644"
+        timeout: 120
+      register: guest_image
+
+    - name: Create the bare VM shell
+      ansible.builtin.command:
+        argv:
+          - qm
+          - create
+          - "{{ pve_template_vmid }}"
+          - --name
+          - "{{ pve_template_name }}"
+          - --ostype
+          - l26
+          - --cpu
+          - host
+          - --sockets
+          - "1"
+          - --cores
+          - "2"
+          - --memory
+          - "2048"
+          - --numa
+          - "0"
+          - --net0
+          - "virtio,bridge={{ pve_bridge }}"
+          - --scsihw
+          - virtio-scsi-single
+          # Serial console so `qm terminal` works when SSH is not yet up.
+          # noVNC stays available — we deliberately do NOT set --vga serial0.
+          - --serial0
+          - socket
+          - --agent
+          - "enabled=1"
+      changed_when: true
+
+    # No --format flag: it is only valid on file-based storage. Omitting it lets
+    # PVE pick raw on LVM-thin / ZFS and qcow2 on dir/NFS, so this role works
+    # whatever `pvesm status` turned out to be.
+    - name: Import the qcow2 as an unused disk
+      ansible.builtin.command:
+        argv:
+          - qm
+          - importdisk
+          - "{{ pve_template_vmid }}"
+          - "{{ guest_image.dest }}"
+          - "{{ pve_storage }}"
+      changed_when: true
+
+    # The resulting volume ID differs by storage backend
+    # (local-lvm:vm-8000-disk-0 vs local:8000/vm-8000-disk-0.qcow2), so read it
+    # back instead of guessing.
+    - name: Read the imported volume ID
+      ansible.builtin.shell:
+        cmd: "set -o pipefail && qm config {{ pve_template_vmid }} | awk -F': ' '/^unused0:/ {print $2}'"
+        executable: /bin/bash
+      register: pve_unused_disk
+      changed_when: false
+
+    - name: Fail if the import produced no disk
+      ansible.builtin.assert:
+        that: pve_unused_disk.stdout | length > 0
+        fail_msg: >-
+          qm importdisk left no unused0 volume on {{ pve_template_vmid }}.
+          Check `qm config {{ pve_template_vmid }}` and free space on
+          {{ pve_storage }} before re-running.
+
+    - name: Attach the disk, cloud-init drive and boot order
+      ansible.builtin.command:
+        argv:
+          - qm
+          - set
+          - "{{ pve_template_vmid }}"
+          - --scsi0
+          - "{{ pve_unused_disk.stdout }},discard=on"
+          - --ide2
+          - "{{ pve_storage }}:cloudinit"
+          - --boot
+          - order=scsi0
+          - --tablet
+          - "0"
+      changed_when: true
+
+    - name: Convert to a template
+      ansible.builtin.command: "qm template {{ pve_template_vmid }}"
+      changed_when: true
+
+- name: Report the template state
+  ansible.builtin.debug:
+    msg: >-
+      Template {{ pve_template_name }} ({{ pve_template_vmid }})
+      {{ 'already present — left alone' if pve_template_check.rc == 0 else 'built' }}
+  tags: [template]

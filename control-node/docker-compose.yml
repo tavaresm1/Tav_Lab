@@ -1,38 +1,49 @@
-# Ansible control node for Tav-Serv.
+# Ansible control node for the homelab.
 #
-# Usage from Tav-Serv (once files are in place):
+# Usage (from a host that is ON the tailnet — the container inherits the host's
+# Tailscale connection via network_mode: host):
 #
-#   cd ~/control-node                         # or wherever you keep this compose file
+#   cd control-node
 #   docker compose build
 #   docker compose run --rm ansible ansible -i inventory/hosts.ini all -m ping
-#   docker compose run --rm ansible ansible-playbook -i inventory/hosts.ini site.yml
+#   docker compose run --rm ansible ansible-playbook playbooks/autobase.yml --ask-vault-pass
 #
-# The container connects to Tav-Serv over SSH at 100.80.216.116 (Tailscale IP).
-# The SSH key mounted at ~/.ssh/id_ed25519 in the container must match a pubkey
-# in tavaresm1@tav-serv:~/.ssh/authorized_keys.
+# Build context is the repo root so the image can bake in ansible/requirements.yml.
+#
+# Two keys are mounted, for two different trust paths:
+#   ansible_control -> root@pve, the hypervisor (and formerly tav-serv)
+#   autobase        -> ansible@ the Ubuntu guests. cloud-init installs its public
+#                      half, and it is the key you paste into the Console when
+#                      creating a cluster. See docs/autobase.md.
 
 services:
   ansible:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: control-node/Dockerfile
       args:
         ANSIBLE_UID: 1000
         ANSIBLE_GID: 1000
     image: tav_lab_ansible:latest
     container_name: tav_lab_ansible
     hostname: ansible
-    network_mode: host   # so we can reach Tav-Serv via its Tailscale IP directly
+    network_mode: host   # so we can reach pve and the guests over the tailnet
     environment:
       REPO_URL: https://github.com/tavaresm1/Tav_Lab.git
       REPO_BRANCH: main
       ANSIBLE_HOST_KEY_CHECKING: "False"
     volumes:
-      # SSH key for reaching Tav-Serv — generate once with:
-      #   ssh-keygen -t ed25519 -f ./ssh_keys/ansible_control -C "ansible-control@tav-serv"
-      # then add the .pub content to tavaresm1@tav-serv:~/.ssh/authorized_keys
+      # Hypervisor key — generate once with:
+      #   ssh-keygen -t ed25519 -f ./ssh_keys/ansible_control -C "ansible-control@pve"
+      # then add the .pub to root@pve:~/.ssh/authorized_keys
       - ./ssh_keys/ansible_control:/home/ansible/.ssh/id_ed25519:ro
       - ./ssh_keys/ansible_control.pub:/home/ansible/.ssh/id_ed25519.pub:ro
+
+      # Guest key — generate once with:
+      #   ssh-keygen -t ed25519 -f ./ssh_keys/autobase -C "autobase@pve"
+      # then paste the .pub into autobase_ssh_pubkey in group_vars/autobase.yml
+      - ./ssh_keys/autobase:/home/ansible/.ssh/autobase:ro
+      - ./ssh_keys/autobase.pub:/home/ansible/.ssh/autobase.pub:ro
 
       # Persist the cloned repo between runs (optional — otherwise it re-clones)
       - repo_cache:/home/ansible/Tav_Lab

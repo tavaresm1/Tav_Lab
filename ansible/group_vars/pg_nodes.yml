@@ -1,0 +1,12 @@
+---
+# The Postgres nodes. We only prepare them — Autobase installs Patroni, etcd,
+# PostgreSQL and PgBouncer onto them from the Console.
+
+# Ports to open if guest_firewall_enabled is turned on for this group.
+guest_firewall_tcp_ports: "{{ autobase_cluster_ports }}"
+
+# Ubuntu cloud images enable unattended-upgrades by default. On a database node
+# that means apt can restart PostgreSQL on its own schedule, mid-transaction,
+# with no operator present — and Autobase pins the Postgres packages it manages.
+# Patching these nodes is a deliberate, scheduled act.
+guest_unattended_upgrades: false

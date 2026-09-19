@@ -1,0 +1,6 @@
+---
+# Docker's apt repo is keyed on Ubuntu codenames. Mint reports its own
+# ("zena", "xia", ...) and has no repo of its own, so it maps to the Ubuntu
+# release it is built on. Ubuntu hosts report the right codename already.
+docker_apt_codename: "{{ 'noble' if ansible_distribution == 'Linux Mint' else ansible_distribution_release }}"
+docker_apt_arch: "{{ ansible_architecture | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}"

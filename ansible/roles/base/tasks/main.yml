@@ -4,55 +4,10 @@
     name: "{{ timezone }}"
   tags: base
 
-- name: Ensure /etc/apt/keyrings exists
-  ansible.builtin.file:
-    path: /etc/apt/keyrings
-    state: directory
-    mode: "0755"
-  tags: base
-
-# -------- Docker apt repo --------
-- name: Docker GPG key
-  ansible.builtin.get_url:
-    url: https://download.docker.com/linux/ubuntu/gpg
-    dest: /etc/apt/keyrings/docker.asc
-    mode: "0644"
-    force: false
-  tags: [base, docker-repo]
-
-- name: Docker apt source
-  ansible.builtin.apt_repository:
-    repo: >-
-      deb [arch={{ ansible_architecture | replace('x86_64','amd64') }}
-      signed-by=/etc/apt/keyrings/docker.asc]
-      https://download.docker.com/linux/ubuntu
-      {{ ansible_distribution_release | default('noble') }}
-      stable
-    filename: docker
-    state: present
-    update_cache: true
-  tags: [base, docker-repo]
-  vars:
-    # Mint's distribution_release is 'zena' but Docker expects the Ubuntu codename.
-    ansible_distribution_release: noble
-
-# -------- Tailscale apt repo --------
-- name: Tailscale keyring
-  ansible.builtin.get_url:
-    url: https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg
-    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
-    mode: "0644"
-    force: false
-  tags: [base, tailscale-repo]
-
-- name: Tailscale apt source
-  ansible.builtin.copy:
-    dest: /etc/apt/sources.list.d/tailscale.list
-    mode: "0644"
-    content: |
-      deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main
-  tags: [base, tailscale-repo]
-
+# The Docker and Tailscale apt repos used to be set up here. They moved into
+# roles/docker and roles/tailscale so those roles work standalone on hosts that
+# never run this one (the Ubuntu platform guests — see roles/guest_baseline).
+# Keeping a second copy here would mean two roles writing the same apt source.
 - name: Apt update
   ansible.builtin.apt:
     update_cache: true

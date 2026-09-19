@@ -8,11 +8,16 @@ REPO_URL="${REPO_URL:-https://github.com/tavaresm1/Tav_Lab.git}"
 REPO_DIR="${REPO_DIR:-/home/ansible/Tav_Lab}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 
-# SSH key for target (Tav-Serv) is expected at /home/ansible/.ssh/id_ed25519
-# and mounted read-only by docker-compose. Fix permissions defensively.
-if [[ -f /home/ansible/.ssh/id_ed25519 ]]; then
-    chmod 600 /home/ansible/.ssh/id_ed25519 || true
-fi
+# SSH keys are mounted read-only by docker-compose:
+#   id_ed25519 -> root@pve (the hypervisor)
+#   autobase   -> ansible@ the Ubuntu guests
+# Fix permissions defensively; the chmod is a no-op on a read-only mount, in
+# which case the key must already be 600 on the host.
+for key in id_ed25519 autobase; do
+    if [[ -f "/home/ansible/.ssh/${key}" ]]; then
+        chmod 600 "/home/ansible/.ssh/${key}" || true
+    fi
+done
 
 if [[ ! -d "${REPO_DIR}/.git" ]]; then
     echo "[entrypoint] cloning ${REPO_URL} → ${REPO_DIR}"

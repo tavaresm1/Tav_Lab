@@ -1,8 +1,29 @@
 ---
+# Tailscale. The apt repo is set up here rather than in roles/base so the role is
+# self-contained for the Ubuntu platform guests, which never run base.
+- name: Tailscale keyring
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/ubuntu/{{ tailscale_apt_codename }}.noarmor.gpg"
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    mode: "0644"
+    force: false
+  when: tailscale_enabled | default(true)
+  tags: [tailscale, net, tailscale-repo]
+
+- name: Tailscale apt source
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/tailscale.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu {{ tailscale_apt_codename }} main
+  when: tailscale_enabled | default(true)
+  tags: [tailscale, net, tailscale-repo]
+
 - name: Install Tailscale
   ansible.builtin.apt:
     name: tailscale
     state: present
+    update_cache: true
   when: tailscale_enabled | default(true)
   tags: [tailscale, net]
 
@@ -25,13 +46,19 @@
   when: tailscale_enabled | default(true)
   tags: [tailscale]
 
+# An auth key makes the first login non-interactive, which is what unattended
+# guests need. no_log is conditional so hosts logging in by hand still show their
+# output — nothing is hidden unless there is actually a key to hide.
 - name: Bring tailscale up (first-time login)
-  ansible.builtin.command: "tailscale up {{ tailscale_up_flags | join(' ') }}"
+  ansible.builtin.command: >-
+    tailscale up {{ tailscale_up_flags | join(' ') }}
+    {{ ('--auth-key=' ~ tailscale_authkey) if (tailscale_authkey | default('') | length > 0) else '' }}
   when:
     - tailscale_enabled | default(true)
     - ts_status.stdout is defined
     - '"NeedsLogin" in ts_status.stdout or "NoState" in ts_status.stdout'
   changed_when: true
+  no_log: "{{ (tailscale_authkey | default('') | length) > 0 }}"
   tags: [tailscale]
 
 - name: Apply tailscale flag drift (set)

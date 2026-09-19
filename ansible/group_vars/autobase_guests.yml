@@ -1,0 +1,32 @@
+---
+# Derived connection settings for every platform guest. Addressing itself lives
+# in autobase_guests in group_vars/autobase.yml — keeping ansible_host derived
+# means an IP is written down exactly once.
+ansible_host: "{{ autobase_guests[inventory_hostname].ip }}"
+ansible_user: "{{ autobase_ci_user }}"
+
+# Private half of the key cloud-init installed for autobase_ci_user.
+# Path is inside the control-node container (see control-node/docker-compose.yml).
+ansible_ssh_private_key_file: "{{ autobase_ssh_private_key_file | default('~/.ssh/autobase') }}"
+
+# The guests are Ubuntu Server 24.04 cloud images. roles/base is not reused
+# against them — it is written for Mint on bare metal (swapfile sizing,
+# unattended-upgrades policy, Openbox cleanup, ipmitool/smartmontools).
+# roles/guest_baseline is the VM-appropriate equivalent.
+guest_packages:
+  - qemu-guest-agent
+  - chrony
+  - python3
+  - tar                # required by Ansible's unarchive/fetch paths
+  - htop
+  - ncdu
+  - tmux
+  - lsof
+  - jq
+
+# ufw ships installed-but-inactive on the Ubuntu cloud image, and no other host
+# in this repo manages a host firewall — the LAN is the trust boundary. Left off
+# to stay consistent, and because a half-configured ufw in front of Patroni and
+# etcd fails in confusing ways. Flip to true per group to enable it; the role
+# always allows SSH first so enabling it cannot lock you out.
+guest_firewall_enabled: false

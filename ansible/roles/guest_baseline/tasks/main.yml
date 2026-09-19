@@ -1,0 +1,118 @@
+---
+# Baseline for the Ubuntu 24.04 platform guests.
+#
+# roles/base is deliberately NOT reused here: it is written for Mint on bare
+# metal (swapfile sizing, Openbox cleanup, ipmitool/smartmontools/lm-sensors),
+# none of which belongs in a VM. This role covers only what the guests need.
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  tags: [baseline]
+
+# Autobase resolves cluster members by name in the Patroni and etcd configs, so
+# every node must resolve every other node without leaning on the LAN's DNS.
+- name: Ensure /etc/hosts entries for all platform guests
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "^{{ item.value.ip }}\\s"
+    line: "{{ item.value.ip }} {{ item.key }}"
+    state: present
+  loop: "{{ autobase_guests | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  tags: [baseline]
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ timezone }}"
+  tags: [baseline]
+
+- name: Apt update
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 300
+  tags: [baseline]
+
+- name: Install guest packages
+  ansible.builtin.apt:
+    name: "{{ guest_packages }}"
+    state: present
+  tags: [baseline]
+
+- name: Enable guest services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - qemu-guest-agent
+    - chrony
+  tags: [baseline]
+
+# Matches the trust model already documented for Tav-Serv: the SSH key is the
+# trust anchor, so sudo does not add a second prompt.
+# See docs/context/design-decisions.md "NOPASSWD sudo grant".
+# cloud-init normally grants this to its default user already; making it
+# explicit means Autobase's `become` works regardless of image changes.
+- name: NOPASSWD sudo for the automation user
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/90-{{ autobase_ci_user }}-nopasswd"
+    mode: "0440"
+    owner: root
+    group: root
+    content: "{{ autobase_ci_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    validate: "visudo -cf %s"
+  tags: [baseline]
+
+- name: Set unattended-upgrades policy
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "{{ 1 if (guest_unattended_upgrades | default(true)) else 0 }}";
+      APT::Periodic::AutocleanInterval "7";
+  tags: [baseline]
+
+# -------- Optional host firewall --------
+# Off by default (see group_vars/autobase_guests.yml). SSH is allowed before the
+# default-deny policy is applied, so enabling this cannot lock you out.
+- name: Configure ufw
+  when: guest_firewall_enabled | default(false)
+  tags: [baseline, firewall]
+  block:
+    # Present in the Ubuntu cloud image, but not guaranteed — the module needs
+    # the binary, so install it rather than assume it.
+    - name: Install ufw
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+
+    - name: Allow SSH before anything else
+      community.general.ufw:
+        rule: allow
+        name: OpenSSH
+
+    - name: Allow this guest's service ports from the lab subnet
+      community.general.ufw:
+        rule: allow
+        src: "{{ autobase_subnet_cidr }}"
+        port: "{{ item }}"
+        proto: tcp
+      loop: "{{ guest_firewall_tcp_ports | default([]) }}"
+
+    - name: Enable ufw with a default-deny inbound policy
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+- name: Confirm the root filesystem grew to the requested size
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} root fs:
+      {{ (ansible_mounts | selectattr('mount', 'equalto', '/') | first).size_total
+         | human_readable(unit='G') }}
+      (disk provisioned at {{ autobase_guests[inventory_hostname].disk_gb }}G)
+  tags: [baseline]
