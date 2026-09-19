@@ -37,22 +37,29 @@ services:
       REPO_BRANCH: main
       ANSIBLE_HOST_KEY_CHECKING: "False"
     volumes:
-      # Hypervisor key — generate once with:
+      # The whole key directory, read-only, in one mount. The entrypoint copies
+      # what it finds into ~/.ssh at 0600 — SSH rejects a key whose mode is too
+      # open, and the mode of a :ro bind mount comes from the host and cannot be
+      # chmod'ed inside the container.
+      #
+      # Mounting the directory rather than four individual files is deliberate:
+      # docker-compose silently creates an empty DIRECTORY at any bind-mount
+      # source that doesn't exist. Per-file mounts turned a missing key into
+      # ~/.ssh/id_ed25519 being a directory, which fails much later and much more
+      # confusingly than one empty ssh_keys/ that the entrypoint can diagnose.
+      #
+      # Generate both keys once (control-node/README.md step 2):
       #   ssh-keygen -t ed25519 -f ./ssh_keys/ansible_control -C "ansible-control@tavares-lab"
-      # then add the .pub to root@tav-serv:~/.ssh/authorized_keys
-      - ./ssh_keys/ansible_control:/home/ansible/.ssh/id_ed25519:ro
-      - ./ssh_keys/ansible_control.pub:/home/ansible/.ssh/id_ed25519.pub:ro
-
-      # Guest key — generate once with:
-      #   ssh-keygen -t ed25519 -f ./ssh_keys/autobase -C "autobase@tavares-lab"
-      # then paste the .pub into autobase_ssh_pubkey in group_vars/autobase.yml
-      - ./ssh_keys/autobase:/home/ansible/.ssh/autobase:ro
-      - ./ssh_keys/autobase.pub:/home/ansible/.ssh/autobase.pub:ro
+      #   ssh-keygen -t ed25519 -f ./ssh_keys/autobase        -C "autobase@tavares-lab"
+      # ansible_control.pub goes in root@tav-serv:~/.ssh/authorized_keys;
+      # autobase.pub goes in autobase_ssh_pubkey in group_vars/autobase.yml.
+      - ./ssh_keys:/home/ansible/ssh_keys:ro
 
       # Persist the cloned repo between runs (optional — otherwise it re-clones)
       - repo_cache:/home/ansible/Tav_Lab
 
-      # Persist known_hosts so we don't re-prompt every run
+      # Persist known_hosts so we don't re-prompt every run. The entrypoint writes
+      # an ~/.ssh/config that points UserKnownHostsFile here.
       - ssh_state:/home/ansible/.ssh_state
     stdin_open: true
     tty: true

@@ -43,6 +43,22 @@ ARG ANSIBLE_GID=1000
 RUN addgroup -g ${ANSIBLE_GID} ansible && \
     adduser -D -u ${ANSIBLE_UID} -G ansible -s /bin/bash ansible
 
+# Create every mountpoint in the image, owned by ansible, BEFORE the volumes are
+# attached. Docker creates a missing mountpoint as root:root 0755 and initializes
+# a fresh named volume from the image path's ownership — so without this, the
+# repo_cache volume lands root-owned and the entrypoint's clone dies with
+# "/home/ansible/Tav_Lab/.git: Permission denied" while running as uid 1000.
+#   Tav_Lab     -> repo_cache volume (the working clone)
+#   .ssh_state  -> ssh_state volume (persisted known_hosts)
+#   ssh_keys    -> read-only bind mount of control-node/ssh_keys/
+#   .ssh        -> writable, entrypoint copies the keys in at 0600
+RUN mkdir -p /home/ansible/Tav_Lab \
+             /home/ansible/.ssh_state \
+             /home/ansible/ssh_keys \
+             /home/ansible/.ssh \
+    && chmod 0700 /home/ansible/.ssh \
+    && chown -R ansible:ansible /home/ansible
+
 USER ansible
 WORKDIR /home/ansible
 
