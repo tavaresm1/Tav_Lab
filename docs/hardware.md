@@ -83,8 +83,8 @@ Confirmed 2026-09-18 with `ip -br addr` and `ip route show default`:
   setting is in play — worth knowing before touching `/etc/network/interfaces`.)
 - `vmbr0` holds `192.168.1.226/24`; default route via `192.168.1.1`.
   `pve_bridge: vmbr0` in `group_vars/autobase.yml` matches.
-- Whether `.226` is static in `/etc/network/interfaces` or a DHCP lease is
-  **unconfirmed**, and it matters: the inventory reaches the box by that address.
+- `.226` is **static** (confirmed 2026-09-18), so the inventory is safe to reach
+  the box by address — `ansible_host=192.168.1.226` in `inventory/hosts.ini`.
 - iDRAC address unconfirmed — see the Chassis section.
 - `tailscale0` is up at `100.111.136.81`. **MagicDNS name is `pve`, not
   `tav-serv`** — the node is named after the hostname. Prefer the LAN address or
