@@ -100,8 +100,11 @@ cat ssh_keys/ansible_control.pub | \
 select the node → **Shell**. That is a root shell in the browser; paste the key
 in there.
 
-**If the box is unreachable on the network entirely:** iDRAC at
-`192.168.0.120` → virtual console → log in as root → same paste.
+**If the box is unreachable on the network entirely:** iDRAC → virtual console →
+log in as root → same paste. The iDRAC address is currently **unconfirmed**: the
+old hardware notes say `192.168.0.120`, which predates the move to the
+`192.168.1.0/24` LAN, so don't trust it. `ipmitool lan print 1` on the host
+prints the real one — see [../docs/hardware.md](../docs/hardware.md).
 
 ### Step 4 — build the image
 

@@ -123,7 +123,7 @@ Ask the seller for the SMART output on each drive. Look at:
    Shell at `https://tav-serv:8006`, or iDRAC if the network is down).
    `control-node/README.md` step 3.
 8. `ansible-playbook playbooks/proxmox-host.yml`, then re-approve the
-   `192.168.0.0/24` subnet route in the Tailscale admin console — re-registering
+   `192.168.1.0/24` subnet route in the Tailscale admin console — re-registering
    the node drops the old approval.
 9. Restore the guests from `vzdump`, then rebuild the Postgres platform from
    `docs/autobase.md`.

@@ -15,7 +15,10 @@ See also: [../ansible/host_vars/tav-serv.yml](../ansible/host_vars/tav-serv.yml)
 
 - Dell PowerEdge R610
 - BIOS 6.4.0 (2013-07-23) — final for the platform is 6.6.0 (Feb 2018)
-- iDRAC6 firmware 2.85, static `192.168.0.120` (shared LOM mode currently)
+- iDRAC6 firmware 2.85, shared LOM mode. **Address unconfirmed:** the 2026-07-05
+  audit recorded `192.168.0.120`, but the LAN is `192.168.1.0/24` (tav-serv is
+  `192.168.1.226`), so that cannot be right as written. Run `ipmitool lan print 1`
+  on the host and correct this line.
 - Enterprise iDRAC card physically present per BMC sensor; license status TBD
 
 ## CPU
@@ -48,7 +51,8 @@ See also: [../ansible/host_vars/tav-serv.yml](../ansible/host_vars/tav-serv.yml)
   `vmbr0` bridge — confirm which with `ip -br addr` and
   `/etc/network/interfaces`, and set `pve_bridge` in `group_vars/autobase.yml`
   to match
-- iDRAC on `192.168.0.120`, LAN `192.168.0.0/24`
+- LAN `192.168.1.0/24`; tav-serv itself is `192.168.1.226`. iDRAC address
+  unconfirmed — see the Chassis section.
 - MagicDNS name `tav-serv`; tav-serv is the tailnet subnet router for the LAN.
   Its tailnet IP changed when the node was re-registered during the rebuild —
   read it from `tailscale status`, don't rely on a written-down value.

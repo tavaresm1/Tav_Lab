@@ -16,7 +16,7 @@ guest_unattended_upgrades: true
 # group_vars/all.yml defines no docker_users at all, and its tailscale_up_flags
 # are written for tav-serv:
 #
-#   tailscale_up_flags: [--ssh, --advertise-routes=192.168.0.0/24,
+#   tailscale_up_flags: [--ssh, --advertise-routes=192.168.1.0/24,
 #                        --accept-routes]
 #                              -> a DB console has no business advertising the
 #                                 LAN subnet; tav-serv is the subnet router.

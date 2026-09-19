@@ -16,12 +16,16 @@ locale: en_US.UTF-8
 docker_enabled: true
 
 # Tailscale. These flags are written for tav-serv, which is the tailnet subnet
-# router for the lab LAN — that is what makes iDRAC (192.168.0.120), the PVE UI
-# and the Autobase guests reachable from anywhere on the tailnet. The route needs
-# one-time approval in the Tailscale admin console.
+# router for the lab LAN — that is what makes iDRAC, the PVE UI and the Autobase
+# guests reachable from anywhere on the tailnet. The route needs one-time approval
+# in the Tailscale admin console.
 # Guests must NOT inherit this; autobase_console.yml overrides it.
+#
+# The LAN is 192.168.1.0/24 — tav-serv is 192.168.1.226. Earlier revisions of this
+# repo said 192.168.0.0/24; that was wrong and advertising it would have routed
+# nothing.
 tailscale_enabled: true
 tailscale_up_flags:
   - --ssh
-  - --advertise-routes=192.168.0.0/24
+  - --advertise-routes=192.168.1.0/24
   - --accept-routes

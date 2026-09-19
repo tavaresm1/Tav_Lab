@@ -27,11 +27,11 @@ which is what it requires.
   path every ops command in this repo assumes, and the one the control-node
   container inherits through `network_mode: host`.
 - **tavares-lab → PVE web UI:** `https://tav-serv:8006`.
-- **Any tailnet peer → the lab LAN (`192.168.0.0/24`):** via tav-serv as subnet
-  router. That is what makes iDRAC (`192.168.0.120`) and the platform guests
-  reachable from off-LAN:
+- **Any tailnet peer → the lab LAN (`192.168.1.0/24`):** via tav-serv as subnet
+  router. That is what makes iDRAC (address unconfirmed — see `docs/hardware.md`)
+  and the platform guests reachable from off-LAN:
   ```
-  tailscale up --ssh --advertise-routes=192.168.0.0/24 --accept-routes
+  tailscale up --ssh --advertise-routes=192.168.1.0/24 --accept-routes
   ```
   Set in `ansible/group_vars/all.yml` under `tailscale_up_flags`. The route needs
   **one-time approval in the Tailscale admin console** after first apply — that
@@ -78,5 +78,5 @@ live under `control-node/ssh_keys/` and are gitignored.
   Enable host networking`). Without it the bridge still routes out through the
   host, one NAT hop slower.
 - **Subnet-route approval is not idempotent-by-Ansible.** A rebuild of tav-serv
-  re-registers the node, which means re-approving the `192.168.0.0/24` route in
+  re-registers the node, which means re-approving the `192.168.1.0/24` route in
   the admin console. It is step 6 of the rebuild runbook in the top-level README.

@@ -47,7 +47,14 @@ USER ansible
 WORKDIR /home/ansible
 
 # Entrypoint clones the repo (or pulls if present) then execs the given command.
+#
+# The explicit chmod is not redundant: COPY preserves the source file's mode, and
+# this repo is authored on Windows with core.fileMode=false, so a missing exec bit
+# in the index survives every local `chmod` and only surfaces here as
+# "[FATAL tini] exec /usr/local/bin/entrypoint.sh failed: Permission denied".
+# Setting it in the image makes the build independent of the git mode.
 COPY --chown=ansible:ansible control-node/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]

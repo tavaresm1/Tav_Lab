@@ -22,7 +22,7 @@ its own — see [control-node/README.md](control-node/README.md) for why.
 | Layer | Managed by | Notes |
 |---|---|---|
 | tav-serv host baseline | `roles/proxmox_host` | timezone, troubleshooting tools, sysctl, smartd for the PERC disks |
-| tav-serv on the tailnet | `roles/tailscale` | subnet router for `192.168.0.0/24` |
+| tav-serv on the tailnet | `roles/tailscale` | subnet router for `192.168.1.0/24` |
 | Ubuntu cloud-init template | `roles/proxmox_template` | VMID 8000, built once with `qm` |
 | Autobase platform VMs | `roles/proxmox_guests` | 4 guests over the PVE API |
 | Guest baseline | `roles/guest_baseline` | packages, hostnames, `/etc/hosts`, sudo, optional ufw |
@@ -134,10 +134,10 @@ Full runbook, failover drill and day-2 operations: [docs/autobase.md](docs/autob
 tav-serv is the tailnet subnet router for the lab LAN:
 
 ```
-tailscale up --ssh --advertise-routes=192.168.0.0/24 --accept-routes
+tailscale up --ssh --advertise-routes=192.168.1.0/24 --accept-routes
 ```
 
-That is what makes iDRAC (`192.168.0.120`), the PVE UI (`https://tav-serv:8006`)
+That is what makes iDRAC, the PVE UI (`https://tav-serv:8006`)
 and the Autobase guests reachable from anywhere on the tailnet. The subnet route
 needs **one-time approval in the Tailscale admin console** after first apply —
 not automatable from the node.
@@ -200,7 +200,7 @@ likely reason to do this.
    Console.
 9. **iDRAC check** (optional):
    ```bash
-   ipmitool lan print 1                     # confirm 192.168.0.120
+   ipmitool lan print 1                     # record the real iDRAC address
    ipmitool sel clear                       # baseline the event log
    ```
 

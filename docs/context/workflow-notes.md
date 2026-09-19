@@ -78,11 +78,12 @@ Diagnose first, don't retry blindly. Likely causes:
   current one if you genuinely need it.
 - **VPN interference** — some corporate VPN clients grab all `100.x.x.x`
   traffic and redirect it. Try disabling the VPN or split-tunneling.
-- **Subnet route unapproved** — if tav-serv answers but `192.168.0.x` addresses
-  (iDRAC, the guests) don't, the `192.168.0.0/24` route needs approval in the
+- **Subnet route unapproved** — if tav-serv answers but `192.168.1.x` addresses
+  (iDRAC, the guests) don't, the `192.168.1.0/24` route needs approval in the
   Tailscale admin console. A node rebuild drops the old approval.
-- **tav-serv actually down** — check iDRAC at `192.168.0.120` from a
-  LAN-connected device. If PVE is up but a guest isn't, the PVE UI at
+- **tav-serv actually down** — check iDRAC (address unconfirmed, see
+  `docs/hardware.md`) from a LAN-connected device. If PVE is up but a guest
+  isn't, the PVE UI at
   `https://tav-serv:8006` → the node → Shell gets you `qm` without SSH.
 
 Do not:

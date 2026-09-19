@@ -27,18 +27,30 @@ pve_api_token_id: automation
 pve_api_validate_certs: false     # PVE ships a self-signed cert
 
 # --- Network ---
-autobase_subnet_cidr: 192.168.0.0/24
+# CONFIRMED 2026-09-18: the lab LAN is 192.168.1.0/24 and tav-serv itself is
+# 192.168.1.226 (the user SSHes to it there). This replaces the 192.168.0.0/24
+# that earlier docs assumed — if you find that subnet anywhere else, it's stale.
+autobase_subnet_cidr: 192.168.1.0/24
 autobase_subnet_prefix: 24
-autobase_gateway: 192.168.0.1
+
+# STILL UNCONFIRMED — inferred, verify before the first run:
+#   ip -br addr; ip route show default        # on tav-serv
+#   grep -E "address|gateway" /etc/network/interfaces
+autobase_gateway: 192.168.1.1
 autobase_nameservers:
-  - 192.168.0.1
+  - 192.168.1.1
 autobase_searchdomains:
   - lan
 
 # The single client entry point, owned by vip-manager and moved on failover.
 # MUST be currently unused and outside the DHCP pool — Autobase validates this
 # at deploy time and assigns it after the cluster is up.
-autobase_cluster_vip: 192.168.0.40
+#
+# UNCONFIRMED: check your router's DHCP pool before trusting .30/.40-.43 below.
+# tav-serv sitting at .226 hints the pool may start low (a .100-.200 pool would
+# leave .30-.43 free, a .2-.254 pool would not). `nmap -sn 192.168.1.0/24` from
+# the LAN, or the router's lease table, settles it.
+autobase_cluster_vip: 192.168.1.40
 
 # --- Guests ---
 # Single source of truth for VMIDs, sizing and addressing. Keys match
@@ -56,28 +68,28 @@ autobase_guests:
     memory: 2048
     balloon: 512
     disk_gb: 32
-    ip: 192.168.0.30
+    ip: 192.168.1.30
   pgnode01:
     vmid: 8001
     cores: 2
     memory: 2560
     balloon: 0
     disk_gb: 40
-    ip: 192.168.0.41
+    ip: 192.168.1.41
   pgnode02:
     vmid: 8002
     cores: 2
     memory: 2560
     balloon: 0
     disk_gb: 40
-    ip: 192.168.0.42
+    ip: 192.168.1.42
   pgnode03:
     vmid: 8003
     cores: 2
     memory: 2560
     balloon: 0
     disk_gb: 40
-    ip: 192.168.0.43
+    ip: 192.168.1.43
 
 # ----------------------------------------------------------------------------
 # Cloud-init template (built once on tav-serv by roles/proxmox_template)
