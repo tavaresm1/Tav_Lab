@@ -429,8 +429,13 @@ from there — which is why this stack needs no `prometheus-pve-exporter`.
 ND_KEY=$(aws ssm get-parameter --name /monitoring/netdata-stream-key \
   --with-decryption --query Parameter.Value --output text)
 
+<<<<<<< HEAD
 scp home-node/install-child.sh home-node/config.alloy root@tav-serv:/tmp/
 ssh root@tav-serv "cd /tmp && MON_HOST=mon-aws ND_KEY=$ND_KEY bash install-child.sh"
+=======
+scp home-node/install-child.sh home-node/config.alloy root@192.168.1.226:/tmp/
+ssh root@192.168.1.226 "cd /tmp && MON_HOST=mon-aws ND_KEY=$ND_KEY bash install-child.sh"
+>>>>>>> dd2b55c42d0dbbdaead84ccd33016f8a6d3173b3
 ```
 
 The script installs Netdata as a child (`memory mode = ram`, local health disabled so
@@ -441,7 +446,11 @@ nothing.
 Verify within about a minute:
 
 ```bash
+<<<<<<< HEAD
 ssh root@tav-serv "systemctl status netdata alloy --no-pager | grep -E 'Active|●'"
+=======
+ssh root@192.168.1.226 "systemctl status netdata alloy --no-pager | grep -E 'Active|●'"
+>>>>>>> dd2b55c42d0dbbdaead84ccd33016f8a6d3173b3
 ```
 
 Then check <http://mon-aws:19999> — `tav-serv` should appear in the node list on the
