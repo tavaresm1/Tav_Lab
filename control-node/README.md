@@ -107,10 +107,11 @@ select the node → **Shell**. That is a root shell in the browser; paste the ke
 in there.
 
 **If the box is unreachable on the network entirely:** iDRAC → virtual console →
-log in as root → same paste. The iDRAC address is currently **unconfirmed**: the
-old hardware notes say `192.168.0.120`, which predates the move to the
-`192.168.1.0/24` LAN, so don't trust it. `ipmitool lan print 1` on the host
-prints the real one — see [../docs/hardware.md](../docs/hardware.md).
+log in as root → same paste. iDRAC is at **`192.168.1.251`** (static, confirmed
+2026-09-19 — the old notes' `192.168.0.120` was wrong). Note that this is on the
+LAN, so it is only reachable off-LAN once the tailnet subnet route is approved,
+which is itself something this repo applies — don't count on it as the
+break-glass path from outside the house.
 
 ### Step 4 — build the image
 

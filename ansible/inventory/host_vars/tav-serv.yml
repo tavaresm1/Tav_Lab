@@ -14,14 +14,11 @@ host_notes: |
   PVE node name is `pve`; `tav-serv` is this inventory's alias for it
   2× X5670 = 12c/24t (both sockets populated; baseline reported 24 vCPU 2026-09-19)
   40 GB RAM as measured 2026-09-18 — population unrecorded, was 24 GB; 96 GB planned
-  PERC H700 volume /dev/sda 1.1 TB across 4 members -> the PVE LVM install
-  16 SATA SSDs in two raidz1 pools (Big_Data1, Big_Data2) — not ours
+  PERC H700 volume /dev/sda 1.1 TB across 4x S3500 600 GB -> the PVE LVM install
+  16 SATA SSDs in two raidz1 pools (Big_Data1, Big_Data2) — not ours; 20 SSDs total
+  Big_Data1 wear is uneven: /dev/sdb at 028 remaining w/ 2 realloc (2026-09-19)
   Host IP 192.168.1.226 (static) on the lab LAN (192.168.1.0/24)
-  iDRAC6 — address UNCONFIRMED, see note below
-
-# The Mint-era audit recorded iDRAC at 192.168.0.120, but the LAN is 192.168.1.0/24
-# (tav-serv is 192.168.1.226), so that address cannot be right as written. Confirm
-# with `ipmitool lan print 1` on the host and correct host_notes above.
+  iDRAC6 192.168.1.251 (static, /24, d4:be:d9:ee:e6:e4)
 
 # Westmere-EP: SSE4.2 and POPCNT, but no AVX at all. That puts the box at
 # x86-64-v2, which is why the Autobase guests run Ubuntu — RHEL 10 and its

@@ -18,10 +18,10 @@ See also: [../ansible/inventory/host_vars/tav-serv.yml](../ansible/inventory/hos
 
 - Dell PowerEdge R610
 - BIOS 6.4.0 (2013-07-23) — final for the platform is 6.6.0 (Feb 2018)
-- iDRAC6 firmware 2.85, shared LOM mode. **Address unconfirmed:** the 2026-07-05
-  audit recorded `192.168.0.120`, but the LAN is `192.168.1.0/24` (tav-serv is
-  `192.168.1.226`), so that cannot be right as written. Run `ipmitool lan print 1`
-  on the host and correct this line.
+- iDRAC6 firmware 2.85, shared LOM mode. **`192.168.1.251`**, static, /24,
+  MAC `d4:be:d9:ee:e6:e4` — confirmed 2026-09-19 with `ipmitool lan print 1`.
+  (The 2026-07-05 audit's `192.168.0.120` was wrong on both octets.) Reachable
+  from the tailnet once the `192.168.1.0/24` subnet route is approved.
 - Enterprise iDRAC card physically present per BMC sensor; license status TBD
 
 ## CPU
@@ -113,8 +113,16 @@ Re-audited 2026-09-18 (`lsblk`, `zpool status`, `smartctl --scan`, `pvesm status
 
 - **Four** physical members, `megaraid,0` through `megaraid,3` — the earlier
   record of two is wrong, and `host_vars/tav-serv.yml` had only `[0, 1]`.
-- 1.1 TiB usable from four members implies RAID 5 (3+1) or 3 members plus a hot
-  spare. Confirm with `perccli /c0 show` or `megacli -LDInfo -Lall -a0`.
+- Members are **`INTEL SSDSC2BB600G4`** (S3500 600 GB) — same model as the
+  `Big_Data2` pool, confirmed 2026-09-19 via `smartctl -d megaraid,0 -i`. The
+  2026-07-05 record of "RAID 0 across 2× 1 TB Seagate HDDs" is wrong in every
+  particular. **So the box holds 20 SSDs, not 16.**
+- **RAID level still unconfirmed, narrowed to two options.** 1.1 TiB usable from
+  600 GB members means 1200 GB, which is both RAID 10 across all four *and*
+  RAID 5 across three with the fourth as a hot spare. Either is redundant, so the
+  PVE install is not on a RAID 0 as previously documented. `smartctl` cannot
+  distinguish them — that needs `perccli /c0 show` or `megacli -LDInfo -Lall -a0`
+  (Broadcom/Dell download, not in the Debian repos).
 - Carries the whole PVE install: `pve-swap` 8 GB, `pve-root` 96 GB,
   `pve-data` thin pool 976 GB. Guest disks for VMs 100, 102 and 103 live here,
   which is where the Autobase guests will land too.
@@ -130,8 +138,62 @@ Re-audited 2026-09-18 (`lsblk`, `zpool status`, `smartctl --scan`, `pvesm status
 - **Neither pool is this repo's concern**, but their ARC competes with guest RAM
   — see the Memory section.
 
-The 3× `SSDSC2BX800G4R` in [context/upgrades-in-flight.md](context/upgrades-in-flight.md)
-are moot: the box already runs 16 enterprise SSDs.
+### SSD wear, measured 2026-09-19
+
+First real reading, taken once smartd was switched to `-d sat` (with `-d scsi` the
+attribute table is not returned at all). `Media_Wearout_Indicator` counts **down**
+from 100, so it is percent of rated endurance *remaining*.
+
+| Pool | Device | Wearout | Realloc | |
+|---|---|---|---|---|
+| `Big_Data1` | `/dev/sdb` | **028** | **2** | worst drive in the box, and the only worn one with reallocations |
+| | `/dev/sdi` | 038 | 0 | |
+| | `/dev/sdf` | 041 | 0 | |
+| | `/dev/sdc` | 045 | 0 | |
+| | `/dev/sde` | 058 | 0 | |
+| | `/dev/sdh` | 067 | 0 | |
+| | `/dev/sdg` | 083 | 0 | |
+| | `/dev/sdd` | 084 | 0 | |
+| `Big_Data2` | `/dev/sdq` | 050 | 0 | |
+| | `/dev/sdo` | 058 | 0 | |
+| | `/dev/sdj` | 068 | **17** | most reallocations in the box, but endurance is mid-life |
+| | `/dev/sdk` | 068 | 0 | |
+| | `/dev/sdm` | 070 | 0 | |
+| | `/dev/sdn` | 079 | 0 | |
+| | `/dev/sdp` | 079 | 0 | |
+| | `/dev/sdl` | 100 | 0 | effectively unused |
+
+**The wear is concentrated in `Big_Data1`, which is the pool holding data** (1.8 TB
+free of 4.8 TB; `Big_Data2` is empty). Four of its eight members are under 50%
+remaining and it is **raidz1 — single parity**. That combination is the actual risk
+here: correlated wear across same-age, same-workload drives means a second failure
+during a resilver is not a remote possibility.
+
+Nothing needs doing today, and **none of this is under Postgres** — the Autobase
+guests land on `local-lvm` (the PERC volume), not on either ZFS pool. But two things
+follow:
+
+- `/dev/sdb` at 028 with 2 reallocated sectors is the drive to replace first.
+  Reallocations on an SSD are unusual and mean the controller has already retired
+  blocks.
+- This makes the 3× spare `SSDSC2BX800G4R` (S3610 800 GB) in
+  [context/upgrades-in-flight.md](context/upgrades-in-flight.md) **relevant again**,
+  not moot as previously recorded. They are the right size to replace
+  `Big_Data1`'s worst members one at a time — `zpool replace` on a raidz1 member is
+  an online operation.
+
+Re-read with:
+
+```bash
+for d in b c d e f g h i j k l m n o p q; do
+  printf "%-9s " "/dev/sd$d"
+  smartctl -d sat -A /dev/sd$d | awk '/Media_Wearout_Indicator/{w=$4} /Reallocated_Sector_Ct/{r=$10} END{print "wearout="w" realloc="r}'
+done
+```
+
+(`241 Total_LBAs_Written` reads empty on these drives — Intel reports host writes
+under a differently-named attribute on some firmware revisions. Wearout and
+reallocations are the actionable pair regardless.)
 
 ## Networking
 

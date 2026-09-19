@@ -103,7 +103,21 @@ explain the 40 GB. Installing the rest buys +4 GB per slot and blocks both 96 GB
 routes above, so keep them as spares and run `dmidecode -t memory` before deciding
 anything.
 
-## SSDs (three-drive replacement for current HDD pair)
+## SSDs — repurposed: replace Big_Data1's worn members
+
+> **The premise of this section changed on 2026-09-19.** There is no "current HDD
+> pair" — the PERC volume runs on 4× Intel S3500 600 GB SSDs and the box holds 20
+> SSDs in total. But the first real wear reading found `Big_Data1` (the pool that
+> actually holds data, and raidz1 so single-parity) has four of eight members under
+> 50% endurance remaining, with `/dev/sdb` at **028 and 2 reallocated sectors**.
+> See `../hardware.md` for the full table.
+>
+> So these three drives are worth buying after all — not for a RAID rebuild, but as
+> one-at-a-time `zpool replace` stock for `Big_Data1`'s worst members. That is an
+> online operation and needs no rebuild flow at all. The SMART-verification table
+> below is still exactly the right thing to demand from the seller; ignore the
+> RAID-level discussion and the rebuild sequence unless you are separately
+> rebuilding the PERC volume.
 
 - **Part:** Intel `SSDSC2BX800G4R` — S3610 800 GB, Dell-firmware variant
   (Dell PN `9F3GY` / `09F3GY`)
