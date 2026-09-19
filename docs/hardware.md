@@ -46,14 +46,43 @@ suboptimal — worth checking before buying more.
 - CPU2 bank status now unknown — 8× Hynix `HMT351R7BFR4C-H9` (4GB 1Rx4 PC3-10600R)
   were ordered; some or all may already be installed
 
-> **Only ~9.2 GB was available** as first measured, with 30.9 GB in use. It is
-> the guests, not the filesystem cache: the ZFS ARC was measured at just **3.7 GB**
-> (capped at 8 GB on 2026-09-18 as a guardrail, which freed nothing — don't go
-> looking there again). Four guests configured for 50,096 MB on 40 GB physical
-> means PVE is ballooning them down to roughly 27 GB to fit.
->
-> Guest memory was reduced on 2026-09-18 to make room for the Autobase platform's
-> 9728 MB, so these numbers are stale. Re-measure with `free -m` and `qm list`.
+Guest memory was trimmed on 2026-09-18 to make room for the Autobase platform.
+Configured totals after the trim:
+
+| VMID | Guest | Configured | |
+|---|---|---|---|
+| 100 | `NAS` | 8048 MB | running |
+| 101 | `Kieran-Craft` | 8000 MB | was 16000 |
+| 102 | `Tav-Assistant` | 4080 MB | was 8048 |
+| 103 | `Hermes` | 4048 MB | was 18000 |
+| 104 | `KCraft-b` | 1024 MB | was 8048 |
+| | **existing total** | **25,200 MB** | |
+| 8001-8003, 8010 | Autobase platform | 9,728 MB | balloon off on the DB nodes |
+| | **committed if everything runs** | **34,928 MB** | of 40,188 MB |
+
+That leaves ~5.2 GB for PVE itself plus the ZFS ARC, which is workable but has no
+slack. When the measurement was taken only VM 100 was running, which is why
+`free -m` showed 25,669 MB available; the 34,928 MB figure is the all-guests-running
+case and is the one to plan against. Three things follow:
+
+- **The 8 GB `zfs_arc_max` cap is too generous until the RAM upgrade lands** —
+  34,928 + 8,192 exceeds physical RAM. The ARC's real working set is 3.7 GB, so
+  4 GB (`zfs_arc_max=4294967296`) is the right interim ceiling if everything is
+  going to run at once.
+- **The DB nodes set `balloon: 0` and the pre-existing guests set no `balloon` key
+  at all** (verified 2026-09-18), so PVE can reclaim from all five of them but not
+  from the DB nodes. That is the right priority ordering: under pressure Minecraft
+  yields pages, `shared_buffers` does not. The 8 GB swap partition is the backstop
+  and is currently untouched.
+- **A 96 GB upgrade is planned** (stated 2026-09-18), after which none of this is
+  tight: 34,928 MB against 96 GB is comfortable, the 8 GB ARC cap becomes sensible
+  rather than greedy, and the trimmed guests can have their memory back. Note that
+  a single X5670 only lights 9 of the R610's 18 DIMM slots — see
+  [context/upgrades-in-flight.md](context/upgrades-in-flight.md).
+
+The ZFS ARC was the obvious suspect for the original shortfall and was **not** the
+cause — measured at 3.7 GB against a ~20 GB default ceiling. The RAM was genuinely
+in the guests. Don't go looking there again.
 
 ## Storage
 

@@ -73,33 +73,48 @@ autobase_cluster_vip: 192.168.1.40
 #
 # RAM budget: 2048 + (3 x 2560) = 9728 MB resident.
 #
-# !! IT DOES NOT CURRENTLY FIT. Measured 2026-09-18: the box has 40,188 MB (not
-# the 24 GB the docs claimed), of which 30,929 MB is used and only ~9,259 MB is
-# available. We want 9,728 MB, and three of the four guests disable ballooning,
-# so PVE cannot claw it back under pressure. That is an OOM waiting for the first
-# vacuum.
+# IT FITS — but only just, and the margin is worth understanding before you change
+# any of these numbers.
 #
-# The ZFS ARC was the obvious suspect and it is NOT the problem: measured at
-# 3.7 GB on 2026-09-18, nowhere near the ~20 GB default ceiling. It is capped at
-# 8 GB now (/etc/modprobe.d/zfs.conf) which is a sensible guardrail but frees
-# nothing. Don't go looking there again.
+# The box has 40,188 MB (measured, not the 24 GB the old docs claimed). The
+# existing guests were trimmed on 2026-09-18 and now total 25,200 MB configured:
+# NAS 8048, Kieran-Craft 8000 (was 16000), Tav-Assistant 4080 (was 8048), Hermes
+# 4048 (was 18000), KCraft-b 1024 (was 8048). Plus our 9,728 = 34,928 MB of
+# 40,188, leaving ~5.2 GB for PVE itself and the ZFS ARC.
 #
-# The RAM is genuinely in the guests. Four of them are configured for 50,096 MB
-# against 40 GB physical, so PVE is already ballooning them down to roughly 27 GB
-# to fit. Adding 9,728 MB that mostly CANNOT be ballooned squeezes them to ~17 GB
-# against 50 GB of demand, which is not a tuning question any more — it is a
-# capacity one. Real options, best first:
+# Two caveats:
 #
-#   1. Trim the existing guests. Kieran-Craft (16 GB) and Hermes (18 GB) were the
-#      whole problem. STARTED 2026-09-18 — memory was reduced on some of the
-#      guests, so the 50,096 MB figure above is already stale. Re-measure with
-#      `free -m` and `qm list` and update this block before the first run.
-#   2. Finish the CPU2 + RAM upgrade in docs/context/upgrades-in-flight.md. The
-#      second socket's DIMM bank is unusable until the second X5670 is in.
-#   3. Shrink the platform: pgnodes to 2048, console to 1536 = 7,680 MB. Patroni,
+#   - As measured, 25,669 MB was available — but only NAS was RUNNING. The 34,928
+#     figure is the all-guests-running case, which is the one to plan against.
+#   - At ARC's real 3.7 GB working set plus ~2 GB for PVE, the all-running case
+#     lands right on 40 GB. The 8 GB zfs_arc_max cap in /etc/modprobe.d/zfs.conf
+#     is therefore too generous for now — 4 GB is the right interim ceiling if you
+#     intend to start everything at once before the RAM upgrade lands.
+#
+# A 96 GB upgrade is planned (stated 2026-09-18). Once it's in, all of this
+# arithmetic stops mattering: 34,928 MB committed against 96 GB is comfortable,
+# the 8 GB ARC cap becomes reasonable rather than greedy, and the trimmed guests
+# can be given their memory back. Re-measure and simplify this block then —
+# and note that a single X5670 only lights 9 of the 18 DIMM slots, so check
+# docs/context/upgrades-in-flight.md for whether 96 GB needs the second CPU too.
+#
+# What absorbs an overshoot: none of the pre-existing guests set a `balloon` key
+# (verified 2026-09-18), so PVE can reclaim from all five under pressure, while
+# the pgnodes below set `balloon: 0` and cannot be touched. That is the priority
+# ordering we want — Minecraft yields pages, shared_buffers does not — with the
+# 8 GB swap partition (currently untouched) as the backstop.
+#
+# The ZFS ARC was the obvious suspect for the original shortfall and was NOT the
+# cause: measured at 3.7 GB, nowhere near its ~20 GB default ceiling. The RAM was
+# genuinely in the guests. Don't go looking at ARC again.
+#
+# If it stops fitting before the RAM arrives, in order:
+#   1. Shrink the platform: pgnodes to 2048, console to 1536 = 7,680 MB. Patroni,
 #      etcd, PgBouncer and a 512 MB shared_buffers fit a lab cluster fine.
-#   4. Enable ballooning on the pgnodes (memory as ceiling, balloon as floor) and
+#   2. Enable ballooning on the pgnodes (memory as ceiling, balloon as floor) and
 #      accept that reclaim under shared_buffers can produce latency cliffs.
+#   3. Leave a guest or two stopped. Three of the five were stopped at measurement
+#      time anyway.
 #
 # `playbooks/autobase.yml` asserts on ansible_memfree_mb, so it will refuse the
 # run rather than overcommit silently — but it can only judge the moment it runs.

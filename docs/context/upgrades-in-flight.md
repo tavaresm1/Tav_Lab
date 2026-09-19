@@ -33,7 +33,39 @@ If either CPU downclocks or POST warns about mismatched steppings, verify
 both are SLBV7. Any other X5670 stepping is nominally allowed but Dell
 BIOS is picky and will occasionally downclock the pair.
 
-## CPU2 RAM bank
+## RAM → 96 GB (planned 2026-09-18)
+
+**The box is already at 40,188 MB, not the 24 GB this document was written
+against** — DIMMs were added at some point and never recorded here. The current
+population is unknown; `dmidecode -t memory` is the way to find out, and doing
+that *before* ordering matters because it decides which of the routes below is
+even available.
+
+Target is **96 GB**. Two ways to get there on an R610, which has 18 slots, 9 per
+socket, 3 channels per socket:
+
+| Route | Config | Speed | Needs CPU2? |
+|---|---|---|---|
+| 16 GB RDIMMs | 6× 16 GB in bank A (2 DIMMs per channel) | 1066 MT/s | No |
+| 8 GB RDIMMs | 12× 8 GB across both banks (2 DPC) | 1066 MT/s | **Yes** |
+
+Either way you drop from 1333 to 1066 MT/s by going to 2 DIMMs per channel. Avoid
+3 DPC — it forces 800 MT/s. Populate a bank's slots in multiples of three to keep
+triple-channel; populating in pairs costs ~15% memory bandwidth.
+
+**With only one CPU installed, bank B is dead silicon** — its 9 slots are wired to
+socket 2's memory controller. So the 8 GB route is gated on the second X5670 above,
+and the 16 GB route is the one that works today.
+
+Once 96 GB is in: the Autobase platform's 9728 MB stops being tight (see
+`../hardware.md#memory` for the current 34,928-of-40,188 arithmetic), the trimmed
+guests can have their memory back, the 8 GB `zfs_arc_max` cap becomes sensible
+rather than greedy, and there is headroom to raise `pgnode` memory if a cluster
+needs it. Re-measure and update `../hardware.md`, the top-level `README.md` and
+the sizing note in `inventory/group_vars/autobase.yml` — all three currently
+document the 40 GB squeeze.
+
+### CPU2 RAM bank (ordered under the old 48 GB plan)
 
 - **Part:** Hynix `HMT351R7BFR4C-H9` — 4 GB 1Rx4 PC3-10600R DDR3 RDIMM 1.5V
 - **Quantity:** Lot of 8 (6 for the bank + 2 spares)
@@ -57,10 +89,10 @@ sudo dmidecode -t memory \
 Every populated slot: `4 GB / 1333 MT/s / Rank 1`. Anything at 1066 MT/s
 or wrong rank indicates a bad DIMM or channel population issue.
 
-Capacity goes 24 GB → 48 GB. The Autobase guest sizing in
-`inventory/group_vars/autobase.yml` (9728 MB resident across four VMs) was chosen against
-the current 24 GB with TrueNAS and the Minecraft guest already resident; there is
-room to raise `pgnode` memory afterwards if a cluster needs it.
+These 4 GB sticks were bought to take the box 24 GB → 48 GB, which is superseded
+by the 96 GB plan above: filling bank B with 4 GB DIMMs consumes all six slots for
++24 GB and blocks the 8 GB/12-stick route. If 96 GB is the goal, keep these as
+spares for bank A rather than installing them, and decide the DIMM size first.
 
 ## SSDs (three-drive replacement for current HDD pair)
 

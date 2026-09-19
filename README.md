@@ -39,21 +39,25 @@ reports five:
 | VMID | Name | Mem (MB) | Disk | State |
 |---|---|---|---|---|
 | 100 | `NAS` (TrueNAS SCALE) | 8048 | 32 GB | running |
-| 101 | `Kieran-Craft` (Minecraft + BlueMap) | 16000 | 100 GB | running |
-| 102 | `Tav-Assistant` | 8048 | 32 GB | running |
-| 103 | `Hermes` | 18000 | 100 GB | running |
-| 104 | `KCraft-b` | 8048 | 100 GB | stopped |
+| 101 | `Kieran-Craft` (Minecraft + BlueMap) | 8000 | 100 GB | stopped |
+| 102 | `Tav-Assistant` | 4080 | 32 GB | stopped |
+| 103 | `Hermes` | 4048 | 100 GB | stopped |
+| 104 | `KCraft-b` | 1024 | 100 GB | stopped |
 
 The Autobase platform uses 8000-8003 and 8010, so there is no VMID overlap.
 `roles/proxmox_guests` still asserts that any VMID it is about to touch carries
 the name it expects, so a collision stops the run instead of resizing someone
 else's disk.
 
-The memory column above is from before the 2026-09-18 trim. The box has **40 GB**
-(`free -m` — not the 24 GB the docs claimed), and those four guests were
-configured for 50 GB of it, leaving only ~9.2 GB available against the platform's
-9728 MB. Guest memory was reduced to make room; the sizing note in
-`inventory/group_vars/autobase.yml` has the arithmetic and the fallbacks.
+**Memory fits, with no slack until the RAM upgrade.** The box has **40 GB**
+(`free -m` — not the 24 GB the docs claimed). Guest memory was trimmed on
+2026-09-18 — Kieran-Craft 16000→8000 and Hermes 18000→4048 were the whole problem
+— bringing the five existing guests to 25,200 MB configured. Plus the platform's
+9728 MB that is **34,928 MB of 40,188**, leaving ~5 GB for PVE and the ZFS ARC.
+A 96 GB upgrade is planned, after which this stops being tight. The arithmetic,
+the ARC caveat and the fallbacks are in
+[docs/hardware.md](docs/hardware.md#memory) and the sizing note in
+`inventory/group_vars/autobase.yml`.
 
 ---
 
