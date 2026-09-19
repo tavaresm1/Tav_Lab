@@ -7,7 +7,7 @@ Nodes on the shared tailnet. Updated for the Proxmox rebuild of tav-serv.
 | Node               | Tailscale IP          | Role                                                     |
 |--------------------|-----------------------|----------------------------------------------------------|
 | `tav-serv`         | (re-assigned)         | Homelab hypervisor — Dell R610, Proxmox VE 9. Subnet router. |
-| `tavares-lab`      | (assigned per-login)  | Windows workstation. Ansible control node runs here.     |
+| `tavares-lab`      | (assigned per-login)  | **Linux Mint** workstation, native Docker Engine. Ansible control node runs here. |
 | `autobase`         | (assigned per-login)  | Autobase Console VM (8010). Publishes its UI via `tailscale serve`. |
 | Friend's QNAP NAS  | (assigned per-login)  | External storage / backup target                         |
 
@@ -82,9 +82,11 @@ live under `control-node/ssh_keys/` and are gitignored.
   `nslookup tav-serv` returns `Non-existent domain` and SSH by hostname fails.
   Fix: reconnect Tailscale. Do **not** work around it by pinning the tailnet IP —
   it is no longer the documented one.
-- **Docker Desktop for Windows** needs host networking enabled for a container to
-  inherit the host's tailnet reachability (`Settings → Resources → Network →
-  Enable host networking`). Without it the bridge still routes out through the
+- **The control node inherits the host's tailnet reachability** via
+  `network_mode: host`. On `tavares-lab` (Linux Mint, native Docker Engine) that
+  works with no configuration. If the control node is ever moved to a Docker
+  Desktop host, host networking is opt-in there (`Settings → Resources → Network →
+  Enable host networking`); without it the bridge still routes out through the
   host, one NAT hop slower.
 - **Subnet-route approval is not idempotent-by-Ansible.** A rebuild of tav-serv
   re-registers the node, which means re-approving the `192.168.1.0/24` route in

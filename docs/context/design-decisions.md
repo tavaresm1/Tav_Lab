@@ -33,8 +33,8 @@ preserved in `tav-serv-inventory.md` for reference.
 
 ## The control node runs on the workstation, not on the hypervisor
 
-**Choice:** The `control-node` container runs on `tavares-lab` (the Windows
-workstation) and reaches tav-serv over the tailnet. Docker is deliberately not
+**Choice:** The `control-node` container runs on `tavares-lab` (the Linux Mint
+workstation, native Docker Engine) and reaches tav-serv over the tailnet. Docker is deliberately not
 installed on the Proxmox node.
 
 **Reasoning:** Docker CE rewrites iptables/nftables and manages its own bridges,

@@ -24,11 +24,21 @@ holds SSH access to all three DB nodes.
 
 ## Prerequisites (the workstation)
 
-- **Docker Engine** (Linux) or **Docker Desktop** (Windows/macOS), version 24+
+`tavares-lab` is a **Linux Mint** box running **native Docker Engine** — that is
+the configuration this is actually operated in, and the simplest one: host
+networking works with no toggle, and the container's uid 1000 matches the host
+user, so bind-mounted keys and vault files need no ownership fixing. The Docker
+Desktop and PowerShell notes further down are portability notes, not the primary
+path.
+
+- **Docker Engine** 24+ (native on Linux; Docker Desktop on Windows/macOS also works)
+- **`docker-compose`** — note the hyphen. Mint ships the v1 standalone binary,
+  which is what these commands assume. (`docker compose`, the v2 plugin, is what
+  runs *inside* the managed guests via `roles/docker` — both spellings are correct
+  in this repo, in different places. Don't "fix" one to match the other.)
 - **git**
 - **Network access to tav-serv**, via Tailscale MagicDNS name `tav-serv`
-- An OS user with permission to run `docker` (member of the `docker` group on
-  Linux, or Docker Desktop running under your login)
+- An OS user in the `docker` group
 
 Tailscale must be up on the workstation and logged into the same tailnet as
 tav-serv. The container inherits the host's Tailscale connection through
@@ -225,6 +235,22 @@ docker-compose run --rm ansible bash
 
 ## Platform notes
 
+### Linux, native Docker Engine — the actual setup
+
+This is `tavares-lab` (Linux Mint) and it works as-is. `network_mode: host` gives
+the container the host's Tailscale interface directly, with nothing to enable.
+Two consequences worth knowing:
+
+- The container runs as uid/gid 1000 (`ANSIBLE_UID`/`ANSIBLE_GID` in
+  `docker-compose.yml`), which matches the first human user on a Mint install, so
+  bind-mounted `ssh_keys/` and `vault/` are readable without ownership juggling.
+  If your user is not uid 1000, `id -u` and adjust those build args.
+- `docker-compose` here is the **v1 standalone** binary. Every command in this
+  file is written for it.
+
+The sections below are for moving the control node elsewhere. They are not
+required reading for the primary setup.
+
 ### Windows — Docker Desktop
 
 Docker Desktop 4.34+ supports host networking, but it's **opt-in**:
@@ -244,11 +270,6 @@ Works through Docker Desktop's WSL integration or a native Docker install inside
 the distro. If Tailscale runs on the Windows side only, WSL2 traffic still
 transits the host, so tav-serv is reachable. If Tailscale runs inside WSL, use
 that instance directly.
-
-### Linux (native Docker Engine)
-
-Works as-is. `network_mode: host` gives the container the host's Tailscale
-interface directly.
 
 ### macOS — Docker Desktop
 
