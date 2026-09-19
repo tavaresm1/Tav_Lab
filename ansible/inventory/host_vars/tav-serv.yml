@@ -45,12 +45,18 @@ smartd_megaraid_devices: [0, 1, 2, 3]
 # this, but use what the scan actually said.
 smartd_megaraid_bus: /dev/bus/2
 
-# The 16 SATA SSDs behind the two ZFS pools. They answer plain `-d scsi`, so they
-# would be caught by DEVICESCAN — except DEVICESCAN cannot coexist with the
-# megaraid lines (see roles/proxmox_host/tasks/main.yml), so they are enumerated.
+# The 16 SATA SSDs behind the two ZFS pools. Enumerated because DEVICESCAN cannot
+# coexist with the megaraid lines (see roles/proxmox_host/tasks/main.yml).
+#
 # ZFS itself will notice a failed member; smartd is here for the early warning
-# (wearout, reallocations) that ZFS does not give you.
-smartd_scsi_devices:
+# (wearout, reallocations) that ZFS does not give you. That purpose is why these
+# use `-d sat` and NOT the `-d scsi` that `smartctl --scan` suggests: measured
+# 2026-09-19 on /dev/sdb, `-d scsi -a` returned none of attributes 5/183/184/233/241
+# and `-d sat -a` returned all five. With `-d scsi` smartd would have watched all
+# 16 drives and still been unable to tell you one was wearing out — which on
+# enterprise SSDs with a DWPD budget is the only thing worth watching for.
+# The type comes from smartd_sata_device_type in the role defaults.
+smartd_sata_devices:
   - /dev/sdb    # Big_Data1 — Intel S3510 800 GB ×8
   - /dev/sdc
   - /dev/sdd

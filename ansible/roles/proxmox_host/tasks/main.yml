@@ -57,13 +57,18 @@
       {% for id in smartd_megaraid_devices | default([]) %}
       {{ smartd_megaraid_bus | default('/dev/sda') }} -d megaraid,{{ id }} -a -o on -S on -s (S/../.././02|L/../../6/03) -m root -M exec /usr/share/smartmontools/smartd-runner
       {% endfor %}
-      {% for dev in smartd_scsi_devices | default([]) %}
-      {{ dev }} -d scsi -a -o on -S on -s (S/../.././03|L/../../6/04) -m root -M exec /usr/share/smartmontools/smartd-runner
+      {% for dev in smartd_sata_devices | default([]) %}
+      {{ dev }} -d {{ smartd_sata_device_type | default('sat') }} -a -o on -S on -s (S/../.././03|L/../../6/04) -m root -M exec /usr/share/smartmontools/smartd-runner
       {% endfor %}
   when: smartd_enabled | default(true)
   notify: restart smartd
   tags: [proxmox_host, smart]
 
+# `smartd` works here because Debian's smartmontools package ships
+# smartmontools.service with Alias=smartd.service. Note for anyone debugging: the
+# journal records the CANONICAL name, so `journalctl -u smartd` returns "No
+# entries" even while the service is running and logging. Use
+# `journalctl -u smartmontools`.
 - name: Enable + start smartd
   ansible.builtin.systemd:
     name: smartd
