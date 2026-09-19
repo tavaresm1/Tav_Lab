@@ -12,8 +12,8 @@ host_role: hypervisor
 host_notes: |
   Dell PowerEdge R610 (BIOS 6.4.0), Proxmox VE 9.2.2 (Debian 13 trixie)
   PVE node name is `pve`; `tav-serv` is this inventory's alias for it
-  1× X5670 (2nd socket empty, upgrade pending)
-  40 GB RAM as measured 2026-09-18 — population unrecorded, was 24 GB
+  2× X5670 = 12c/24t (both sockets populated; baseline reported 24 vCPU 2026-09-19)
+  40 GB RAM as measured 2026-09-18 — population unrecorded, was 24 GB; 96 GB planned
   PERC H700 volume /dev/sda 1.1 TB across 4 members -> the PVE LVM install
   16 SATA SSDs in two raidz1 pools (Big_Data1, Big_Data2) — not ours
   Host IP 192.168.1.226 (static) on the lab LAN (192.168.1.0/24)
