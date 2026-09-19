@@ -49,11 +49,11 @@ The Autobase platform uses 8000-8003 and 8010, so there is no VMID overlap.
 the name it expects, so a collision stops the run instead of resizing someone
 else's disk.
 
-Those four running guests are configured for 50 GB of RAM. The box has **40 GB**
-(`free -m`, 2026-09-18 — not the 24 GB the docs claimed), so PVE is overcommitting
-via ballooning, and only **~9.2 GB is actually available**. The platform wants
-9728 MB with ballooning deliberately off on the DB nodes, which does not fit with
-anything to spare. See the sizing note in `inventory/group_vars/autobase.yml`.
+The memory column above is from before the 2026-09-18 trim. The box has **40 GB**
+(`free -m` — not the 24 GB the docs claimed), and those four guests were
+configured for 50 GB of it, leaving only ~9.2 GB available against the platform's
+9728 MB. Guest memory was reduced to make room; the sizing note in
+`inventory/group_vars/autobase.yml` has the arithmetic and the fallbacks.
 
 ---
 

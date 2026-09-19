@@ -46,12 +46,14 @@ suboptimal — worth checking before buying more.
 - CPU2 bank status now unknown — 8× Hynix `HMT351R7BFR4C-H9` (4GB 1Rx4 PC3-10600R)
   were ordered; some or all may already be installed
 
-> **Only ~9.2 GB is available.** 30.9 GB is in use: four guests configured for
-> 50,096 MB total (ballooned down) plus the ZFS ARC for the two pools below, which
-> defaults to half of RAM. The Autobase platform wants 9728 MB with ballooning
-> disabled on three of four guests, so it does not fit with any headroom.
-> Capping the ARC (`zfs_arc_max`) is the cheapest way to free several GB — the
-> guest stores are on LVM, so only `Big_Data1`/`Big_Data2` traffic needs it.
+> **Only ~9.2 GB was available** as first measured, with 30.9 GB in use. It is
+> the guests, not the filesystem cache: the ZFS ARC was measured at just **3.7 GB**
+> (capped at 8 GB on 2026-09-18 as a guardrail, which freed nothing — don't go
+> looking there again). Four guests configured for 50,096 MB on 40 GB physical
+> means PVE is ballooning them down to roughly 27 GB to fit.
+>
+> Guest memory was reduced on 2026-09-18 to make room for the Autobase platform's
+> 9728 MB, so these numbers are stale. Re-measure with `free -m` and `qm list`.
 
 ## Storage
 

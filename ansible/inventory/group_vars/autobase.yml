@@ -79,21 +79,27 @@ autobase_cluster_vip: 192.168.1.40
 # so PVE cannot claw it back under pressure. That is an OOM waiting for the first
 # vacuum.
 #
-# The four running guests are configured for 50,096 MB against 40 GB physical, so
-# ballooning is already working hard. The other big consumer is the ZFS ARC for
-# Big_Data1/Big_Data2, which defaults to half of RAM (~20 GB). Capping it is the
-# cheapest several GB available, and costs nothing here: PVE guest disks live on
-# LVM (local-lvm), so only the two data pools use the ARC at all.
+# The ZFS ARC was the obvious suspect and it is NOT the problem: measured at
+# 3.7 GB on 2026-09-18, nowhere near the ~20 GB default ceiling. It is capped at
+# 8 GB now (/etc/modprobe.d/zfs.conf) which is a sensible guardrail but frees
+# nothing. Don't go looking there again.
 #
-#   # on the host — 8 GB cap, survives reboot
-#   echo "options zfs zfs_arc_max=8589934592" > /etc/modprobe.d/zfs.conf
-#   update-initramfs -u -k all      # then reboot, or set it live:
-#   echo 8589934592 > /sys/module/zfs/parameters/zfs_arc_max
+# The RAM is genuinely in the guests. Four of them are configured for 50,096 MB
+# against 40 GB physical, so PVE is already ballooning them down to roughly 27 GB
+# to fit. Adding 9,728 MB that mostly CANNOT be ballooned squeezes them to ~17 GB
+# against 50 GB of demand, which is not a tuning question any more — it is a
+# capacity one. Real options, best first:
 #
-# Check the ARC's current size first — `arc_summary | head -20` or
-# `awk '/^size/ {print $3/1073741824" GB"}' /proc/spl/kstat/zfs/arcstats`.
-# If capping doesn't free enough, drop the pgnodes to 2048 MB (8192 MB total);
-# Patroni + etcd + PgBouncer + a 512 MB shared_buffers fits a lab cluster.
+#   1. Trim the existing guests. Kieran-Craft (16 GB) and Hermes (18 GB) were the
+#      whole problem. STARTED 2026-09-18 — memory was reduced on some of the
+#      guests, so the 50,096 MB figure above is already stale. Re-measure with
+#      `free -m` and `qm list` and update this block before the first run.
+#   2. Finish the CPU2 + RAM upgrade in docs/context/upgrades-in-flight.md. The
+#      second socket's DIMM bank is unusable until the second X5670 is in.
+#   3. Shrink the platform: pgnodes to 2048, console to 1536 = 7,680 MB. Patroni,
+#      etcd, PgBouncer and a 512 MB shared_buffers fit a lab cluster fine.
+#   4. Enable ballooning on the pgnodes (memory as ceiling, balloon as floor) and
+#      accept that reclaim under shared_buffers can produce latency cliffs.
 #
 # `playbooks/autobase.yml` asserts on ansible_memfree_mb, so it will refuse the
 # run rather than overcommit silently — but it can only judge the moment it runs.
