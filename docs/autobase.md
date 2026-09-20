@@ -79,12 +79,36 @@ ssh root@tav-serv '
   pveum user add ansible@pve
   pveum aclmod / -user ansible@pve -role PVEVMAdmin
   pveum aclmod /storage -user ansible@pve -role PVEDatastoreUser
+  pveum aclmod /sdn/zones/localnetwork -user ansible@pve -role PVESDNUser
   pveum user token add ansible@pve automation --privsep 0
 '
 ```
 
-Copy the printed secret. If a task later returns 403, widen the ACL rather than
-guessing — `PVEVMAdmin` covers clone/config/start but not every storage action.
+Copy the printed secret.
+
+**The third `aclmod` is not optional, and its absence is not obvious.** Since PVE
+8.2 every bridge is an object under `/sdn/zones/<zone>/<bridge>`, and any API call
+that attaches a VM to one — including a clone, which copies `net0` — requires
+`SDN.Use` on it. `PVEVMAdmin` does not grant that, so without this line
+`roles/proxmox_guests` fails on its first task with:
+
+```
+403 Forbidden: Permission check failed (/sdn/zones/localnetwork/vmbr0, SDN.Use)
+```
+
+`localnetwork` is the implicit zone holding the Linux bridges PVE did not create
+through SDN, so that is the right path for a plain `vmbr0` — there is no SDN
+configuration to set up first, and `pvesh get /cluster/sdn/zones` can legitimately
+return an empty list while the ACL path still exists. Granting on the zone
+propagates to every bridge in it.
+
+Note that `roles/proxmox_template` is *not* affected and so proves nothing here: it
+shells out to `qm` over SSH as root, which bypasses the API's permission checks
+entirely. A green template run followed by a 403 on the guests is the expected
+shape of this bug, not a sign that something regressed in between.
+
+If a different 403 appears later, read the object path in the message and widen
+that specific ACL rather than reaching for `PVEAdmin`.
 
 **SSH keys** — two, for two trust paths:
 

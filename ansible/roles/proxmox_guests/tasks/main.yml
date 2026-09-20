@@ -52,6 +52,17 @@
   block:
     # Skipped for guests that already exist, so a re-run never tries to clone
     # over a live VM.
+    #
+    # If this returns `403 Forbidden: Permission check failed
+    # (/sdn/zones/localnetwork/vmbr0, SDN.Use)`, the API token's ACL is short one
+    # grant, and nothing in this role is wrong. A clone copies the template's net0,
+    # and since PVE 8.2 attaching a VM to a bridge needs SDN.Use on the bridge
+    # object — which PVEVMAdmin does not include. On the host:
+    #
+    #   pveum aclmod /sdn/zones/localnetwork -user ansible@pve -role PVESDNUser
+    #
+    # roles/proxmox_template building fine is not evidence against this: it shells
+    # out to `qm` as root over SSH and never goes through the permission check.
     - name: Clone the template
       community.proxmox.proxmox_kvm:
         clone: "{{ pve_template_name }}"

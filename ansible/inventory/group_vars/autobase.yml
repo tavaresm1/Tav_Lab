@@ -19,7 +19,12 @@
 # Flipped true 2026-09-19. What that confirmation actually rests on, honestly:
 #   - pve_node / pve_api_host / pve_storage / pve_bridge: measured on the box
 #   - pve_api_user / pve_api_token_id: the token exists (`ansible@pve!automation`,
-#     created 2026-09-19 with PVEVMAdmin on / and PVEDatastoreUser on /storage)
+#     created 2026-09-19 with PVEVMAdmin on / and PVEDatastoreUser on /storage,
+#     plus PVESDNUser on /sdn/zones/localnetwork added 2026-09-20 — without that
+#     third grant every clone dies on `403 ... (/sdn/zones/localnetwork/vmbr0,
+#     SDN.Use)`, because attaching a VM to a bridge is an SDN-permissioned
+#     operation since PVE 8.2 and PVEVMAdmin does not cover it. See
+#     docs/autobase.md §2.
 #   - subnet / gateway: measured
 #   - the five static addresses: verified unused by scan, NOT by reading the
 #     router's DHCP pool — see the note above autobase_cluster_vip
