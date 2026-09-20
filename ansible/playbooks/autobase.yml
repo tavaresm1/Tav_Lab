@@ -72,6 +72,34 @@
           directory any filename works. (3) Only then, check the contents with
           ansible-vault view. See control-node/README.md step 2b.
 
+    # Learned the hard way 2026-09-20. A token with spaces in it costs an hour:
+    # every layer reports success and the failure surfaces three roles later as a
+    # container that is up, has migrated its database, and fails its own
+    # healthcheck with 401 twenty times in a row. Nothing in that picture points at
+    # the token, and the byte counts match on both sides because nothing is
+    # truncated — the API simply splits the Authorization header on whitespace and
+    # compares the first field, so it rejects the value it was configured with.
+    #
+    # Checked here rather than in roles/autobase_console because it costs nothing
+    # on every run and the Console is not the only thing that will ever consume it.
+    - name: Require the Console auth token to be whitespace-free
+      ansible.builtin.assert:
+        that:
+          - vault_autobase_auth_token | regex_search('\s') is none
+          - vault_autobase_auth_token | length >= 16
+        fail_msg: >-
+          vault_autobase_auth_token is unusable as an HTTP bearer token. It must
+          contain no whitespace and be at least 16 characters. A passphrase with
+          spaces in it will deploy cleanly and then fail as a 401 healthcheck loop
+          on autobase-console-api that looks nothing like a credential problem.
+          Generate one with `openssl rand -hex 32` and replace it with
+          `ansible-vault edit`. This is the Console login secret, so changing it is
+          safe — the API reads it from the environment at start and does not
+          persist it, so no volume needs recreating.
+        success_msg: >-
+          Console auth token is whitespace-free and long enough to be a bearer
+          token.
+
     - name: Confirm the requested storage exists on this node
       ansible.builtin.command: "pvesm status --storage {{ pve_storage }}"
       register: pve_storage_check
