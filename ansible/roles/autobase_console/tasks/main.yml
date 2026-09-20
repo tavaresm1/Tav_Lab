@@ -72,19 +72,57 @@
   when: autobase_console_tailscale_serve | default(false)
   tags: [console, net]
 
+# Capped and rescued for the same reason as roles/tailscale's first-time login:
+# `tailscale serve --bg` normally returns in milliseconds, but it blocks
+# indefinitely when the tailnet cannot issue a certificate for --https=443,
+# because the CLI stops to ask rather than failing. Under Ansible that is a silent
+# hang with the play's last useful output already scrolled past. 60s is generous
+# for a command whose successful form is instant.
+#
+# This is the LAST task that does anything, so a failure here costs nothing that
+# matters: the stack is up and the UI has already answered on :80 by the time we
+# get here. Hence a rescue that explains and continues rather than one that fails.
 - name: Publish the Console over tailscale serve
-  ansible.builtin.command: tailscale serve --bg --https=443 http://127.0.0.1:80
   when:
     - autobase_console_tailscale_serve | default(false)
     - ts_serve.stdout is defined
     - "'127.0.0.1:80' not in ts_serve.stdout"
-  changed_when: true
   tags: [console, net]
+  block:
+    - name: tailscale serve
+      ansible.builtin.command: tailscale serve --bg --https=443 http://127.0.0.1:80
+      changed_when: true
+      timeout: 60
 
+  rescue:
+    - name: Explain the tailnet publish failure and carry on
+      ansible.builtin.debug:
+        msg: >-
+          `tailscale serve --https=443` did not succeed on {{ inventory_hostname }},
+          so the Console is NOT published on the tailnet. It is still fully working
+          on the LAN at http://{{ autobase_guests[inventory_hostname].ip }}/ — this
+          step only adds a TLS front door, so nothing else is affected and the
+          cluster build can proceed. The usual cause is that HTTPS certificates are
+          not enabled for the tailnet: Tailscale needs them to issue a cert for the
+          node's MagicDNS name, and the CLI blocks asking rather than failing, which
+          is why this task was capped at 60s. Enable it in the admin console under
+          DNS, then re-run with `--tags console`. Run the command by hand to see the
+          real message: `sudo tailscale serve --bg --https=443 http://127.0.0.1:80`.
+          To stop attempting this entirely, set autobase_console_tailscale_serve to
+          false in inventory/group_vars/autobase_console.yml.
+
+# The LAN address is stated first and unconditionally because it is the one this
+# role actually verified: the `uri` task above proved :80 answers. The tailnet URL
+# is only offered when `tailscale serve` is configured for it, since printing a URL
+# that does not resolve is worse than printing none — it sends you debugging DNS
+# when the truth is that the publish step never ran or was rescued.
 - name: Report how to reach the Console
   ansible.builtin.debug:
     msg: >-
-      Console up. Tailnet: https://autobase (sign in with the AUTH_TOKEN from
-      inventory/group_vars/all/all.vault.yml). LAN fallback:
-      http://{{ autobase_guests[inventory_hostname].ip }}/
+      Console up at http://{{ autobase_guests[inventory_hostname].ip }}/ — sign in
+      with the AUTH_TOKEN from inventory/group_vars/all/all.vault.yml.
+      {{ 'Also published on the tailnet at https://autobase.'
+         if (autobase_console_tailscale_serve | default(false))
+            and (ts_serve.stdout is defined)
+         else 'Not published on the tailnet.' }}
   tags: [console]
