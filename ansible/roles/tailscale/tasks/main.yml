@@ -54,32 +54,59 @@
   tags: [tailscale]
 
 # An auth key makes the first login non-interactive, which is what unattended
-# guests need. no_log is conditional so hosts logging in by hand still show their
-# output — nothing is hidden unless there is actually a key to hide.
+# guests need.
+#
+# Wrapped in block/rescue because no_log turns any failure here into
+# `"censored": "the output has been hidden..."` — the key is protected, and so is
+# the reason the login failed. That is a dead end: the operator is told only that
+# something went wrong with a task whose whole output is a secret. The rescue
+# cannot print the real stderr (it is censored at the task level, not here), so it
+# prints the differential diagnosis instead, which is nearly as useful because the
+# failure modes are few and distinguishable by timing.
 - name: Bring tailscale up (first-time login)
-  ansible.builtin.command: >-
-    tailscale up {{ tailscale_up_flags | join(' ') }}
-    {{ ('--auth-key=' ~ tailscale_authkey) if (tailscale_authkey | default('') | length > 0) else '' }}
   when:
     - tailscale_enabled | default(true)
     - ts_status.stdout is defined
     - '"NeedsLogin" in ts_status.stdout or "NoState" in ts_status.stdout'
-  changed_when: true
-  no_log: "{{ (tailscale_authkey | default('') | length) > 0 }}"
-  # `tailscale up` with no usable key does not fail — it prints a login URL and
-  # BLOCKS until a human visits it. Under Ansible that is an indefinite hang with
-  # no output (no_log is off in that case, but the task never returns to flush it),
-  # which is the worst possible failure mode for an unattended run. An expired or
-  # already-consumed auth key behaves the same way: Tailscale keys are single-use
-  # and capped at 90 days, so this is the *likely* state of any key generated a
-  # while ago, not an edge case.
-  #
-  # A preflight assert on the key would be wrong — a host that is already logged in
-  # legitimately needs no key, and asserting would block every re-run after the
-  # first. Capping the task is correct in both cases: a keyed login takes seconds,
-  # so 120s only ever expires on the hang.
-  timeout: 120
   tags: [tailscale]
+  block:
+    - name: tailscale up
+      ansible.builtin.command: >-
+        tailscale up {{ tailscale_up_flags | join(' ') }}
+        {{ ('--auth-key=' ~ tailscale_authkey) if (tailscale_authkey | default('') | length > 0) else '' }}
+      changed_when: true
+      # no_log is conditional so hosts logging in by hand still show their output —
+      # nothing is hidden unless there is actually a key to hide.
+      no_log: "{{ (tailscale_authkey | default('') | length) > 0 }}"
+      # With no usable key, `tailscale up` does not fail — it prints a login URL and
+      # BLOCKS until a human visits it. Under Ansible that is an indefinite hang,
+      # the worst failure mode for an unattended run. A preflight assert on the key
+      # would be the wrong guard: a host already logged in legitimately needs no
+      # key, so asserting would block every re-run after the first. Capping the task
+      # is correct either way — a keyed login takes under a second, so 120s only
+      # ever expires on the hang.
+      timeout: 120
+
+  rescue:
+    - name: Explain the failed login without leaking the key
+      ansible.builtin.fail:
+        msg: >-
+          `tailscale up` failed on {{ inventory_hostname }} and its output is
+          censored by no_log, because the command line carries the auth key. Read
+          the elapsed time in the TASKS RECAP to tell the two cases apart. UNDER A
+          FEW SECONDS means the key was rejected — almost always expired (keys cap
+          at 90 days) or single-use and already consumed by an earlier host or an
+          earlier run of this play. AROUND 120 SECONDS means the timeout above
+          fired, so no key reached the command at all and it sat waiting for an
+          interactive login; check that vault_tailscale_authkey is actually set.
+          Either way the fix is one of two things. Generate a fresh key in the
+          Tailscale admin console under Settings - Keys, mark it REUSABLE so this
+          cannot recur, and put it in the vault as vault_tailscale_authkey. Or skip
+          the key entirely and log this host in by hand, once:
+          `sudo tailscale up {{ tailscale_up_flags | join(' ') }}` then open the
+          printed URL. After a manual login this task stops running altogether —
+          the role detects the logged-in state and switches to `tailscale set` for
+          flag drift, which needs no key ever again.
 
 # `--check` cannot preview either of the two tasks above: ansible.builtin.command
 # is not check-mode capable, so Ansible skips it rather than guess at the effect.
