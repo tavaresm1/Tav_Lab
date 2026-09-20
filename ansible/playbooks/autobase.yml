@@ -9,12 +9,22 @@
 #   --tags baseline   packages, hostnames, sudo (and ufw, if enabled) on the guests
 #   --tags console    Docker + Tailscale + the Console stack
 #
-# Expect `unreachable=1` for the four guests when running --tags template or
-# --tags guests before the VMs exist. It is noise, not a failure: a play with
-# `gather_facts: true` still gathers facts even when tag filtering has excluded
-# every one of its tasks, so the baseline and console plays try to connect to
-# hosts that have not been built yet. Read the tav-serv line of the PLAY RECAP —
-# that is the one reporting on work that was actually in scope.
+# Add `--limit tav-serv` to the template and guests slices:
+#
+#   ansible-playbook playbooks/autobase.yml --tags template --limit tav-serv
+#   ansible-playbook playbooks/autobase.yml --tags guests   --limit tav-serv
+#
+# Without it, those runs end in `unreachable=1` for all four guests and the
+# playbook exits 4 even on complete success. The cause is not tag filtering being
+# ignored — it is that a play with `gather_facts: true` gathers facts even when
+# tag filtering has excluded every one of its tasks, so the baseline and console
+# plays try to SSH to VMs that do not exist yet. Both of those slices do all their
+# work on the hypervisor (the guests slice talks to the PVE API and delegates to
+# localhost), so limiting to tav-serv loses nothing and makes a clean run exit 0 —
+# which matters the moment anything checks the exit code.
+#
+# If you do run without --limit, read the tav-serv line of the PLAY RECAP; it is
+# the only one reporting on work that was in scope.
 #
 # This playbook stops at prepared guests on purpose. The Postgres clusters
 # themselves are created from the Console UI (or the vitabaks.autobase
