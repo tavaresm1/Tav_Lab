@@ -66,6 +66,19 @@
     - '"NeedsLogin" in ts_status.stdout or "NoState" in ts_status.stdout'
   changed_when: true
   no_log: "{{ (tailscale_authkey | default('') | length) > 0 }}"
+  # `tailscale up` with no usable key does not fail — it prints a login URL and
+  # BLOCKS until a human visits it. Under Ansible that is an indefinite hang with
+  # no output (no_log is off in that case, but the task never returns to flush it),
+  # which is the worst possible failure mode for an unattended run. An expired or
+  # already-consumed auth key behaves the same way: Tailscale keys are single-use
+  # and capped at 90 days, so this is the *likely* state of any key generated a
+  # while ago, not an edge case.
+  #
+  # A preflight assert on the key would be wrong — a host that is already logged in
+  # legitimately needs no key, and asserting would block every re-run after the
+  # first. Capping the task is correct in both cases: a keyed login takes seconds,
+  # so 120s only ever expires on the hang.
+  timeout: 120
   tags: [tailscale]
 
 # `--check` cannot preview either of the two tasks above: ansible.builtin.command
