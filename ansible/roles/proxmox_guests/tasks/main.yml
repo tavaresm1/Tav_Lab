@@ -40,15 +40,27 @@
   delegate_to: localhost
   become: false
   tags: [guests]
+  # The anchor holds ONLY the connection parameters, because that is the largest
+  # set the two modules actually share. `node` is not in it and must not be: it is
+  # a proxmox_kvm parameter with no proxmox_disk equivalent — proxmox_disk resolves
+  # the node from the vmid itself — so a single anchor covering both modules makes
+  # every disk task fail argument validation before it does anything:
+  #
+  #   Unsupported parameters for (community.proxmox.proxmox_disk) module: node
+  #
+  # module_defaults is not filtered against each module's argspec; whatever is
+  # listed for a module is passed to it verbatim. So the defaults have to be
+  # per-module-correct, not merely convenient.
   module_defaults:
-    community.proxmox.proxmox_kvm: &pve_api
+    community.proxmox.proxmox_disk: &pve_api
       api_host: "{{ pve_api_host }}"
       api_user: "{{ pve_api_user }}"
       api_token_id: "{{ pve_api_token_id }}"
       api_token_secret: "{{ vault_proxmox_api_token_secret }}"
       validate_certs: "{{ pve_api_validate_certs }}"
+    community.proxmox.proxmox_kvm:
+      <<: *pve_api
       node: "{{ pve_node }}"
-    community.proxmox.proxmox_disk: *pve_api
   block:
     # Skipped for guests that already exist, so a re-run never tries to clone
     # over a live VM.
@@ -102,9 +114,18 @@
       loop_control:
         label: "{{ item.key }} -> {{ item.value.ip }}"
 
-    # Before first boot, so cloud-init's growpart extends the root filesystem
-    # for us. The module no-ops when the size already matches; it can only
-    # grow, never shrink.
+    # Before first boot, so cloud-init's growpart extends the root filesystem for
+    # us on the way up rather than needing a second reboot.
+    #
+    # `size` has no `+` prefix, so it is an ABSOLUTE target, matching the PVE
+    # resize endpoint's own `\+?\d+(\.\d+)?[KMGT]?` semantics — 40G means "make it
+    # 40G", not "add 40G". That is what we want from a declarative dict.
+    #
+    # Re-run behaviour is NOT yet verified. PVE refuses to shrink, so the question
+    # is whether asking for the size a disk already has is a no-op or an error, and
+    # whether the module catches that before calling the API. If a second run fails
+    # here with something like "disk is already at specified size", that is the
+    # cause and the fix belongs here — not a sign the first run did anything wrong.
     - name: Grow the root disk
       community.proxmox.proxmox_disk:
         vmid: "{{ item.value.vmid }}"
