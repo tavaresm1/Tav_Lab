@@ -9,6 +9,13 @@
 #   --tags baseline   packages, hostnames, sudo (and ufw, if enabled) on the guests
 #   --tags console    Docker + Tailscale + the Console stack
 #
+# Expect `unreachable=1` for the four guests when running --tags template or
+# --tags guests before the VMs exist. It is noise, not a failure: a play with
+# `gather_facts: true` still gathers facts even when tag filtering has excluded
+# every one of its tasks, so the baseline and console plays try to connect to
+# hosts that have not been built yet. Read the tav-serv line of the PLAY RECAP —
+# that is the one reporting on work that was actually in scope.
+#
 # This playbook stops at prepared guests on purpose. The Postgres clusters
 # themselves are created from the Console UI (or the vitabaks.autobase
 # collection) — that is Autobase's job, not ours.

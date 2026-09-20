@@ -15,6 +15,37 @@
   failed_when: false
   tags: [template]
 
+# `qm config` exiting 0 proves only that the VMID is TAKEN — not that it holds a
+# finished template. The build below is eight non-atomic `qm` calls, so a run that
+# dies between `qm create` and `qm template` leaves a bare VM sitting at this ID.
+# Guarding on the return code alone would then skip the whole block forever: the
+# role would report "already present — left alone" on every subsequent run while
+# roles/proxmox_guests failed to clone from something that is not a template.
+#
+# So verify what is actually there, and refuse to guess. Failing loudly with the
+# fix in the message beats a role that is silently a no-op.
+- name: Verify the existing VMID holds a finished template
+  ansible.builtin.assert:
+    that:
+      - "'template: 1' in pve_template_check.stdout"
+      - "'scsi0:' in pve_template_check.stdout"
+      - "'ide2:' in pve_template_check.stdout"
+    fail_msg: >-
+      VMID {{ pve_template_vmid }} exists on {{ pve_node }} but is not a finished
+      cloud-init template — it is missing
+      {{ 'the template flag' if 'template: 1' not in pve_template_check.stdout else '' }}
+      {{ 'its scsi0 disk' if 'scsi0:' not in pve_template_check.stdout else '' }}
+      {{ 'its ide2 cloud-init drive' if 'ide2:' not in pve_template_check.stdout else '' }}.
+      Most likely an earlier run of this role failed partway through. Inspect it
+      with `qm config {{ pve_template_vmid }}`, then remove it and re-run:
+      `qm destroy {{ pve_template_vmid }}`. Nothing else in this repo uses that
+      VMID, and the guests clone from it rather than depending on it, so
+      destroying it is safe once no clone is in flight.
+    success_msg: >-
+      VMID {{ pve_template_vmid }} is a finished template — build block skipped.
+  when: pve_template_check.rc == 0
+  tags: [template]
+
 - name: Build the Ubuntu cloud-init template
   when: pve_template_check.rc != 0
   tags: [template]
