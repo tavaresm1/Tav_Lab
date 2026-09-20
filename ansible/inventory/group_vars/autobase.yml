@@ -193,7 +193,7 @@ pve_template_name: ubuntu2404-cloudinit
 pve_image_cache_dir: /var/lib/vz/template/iso
 
 # Ubuntu 24.04 LTS, not Rocky 10. RHEL 10 and its rebuilds require an x86-64-v3
-# CPU baseline (AVX2/BMI2/FMA, Haswell and later). tav-serv is a single X5670 —
+# CPU baseline (AVX2/BMI2/FMA, Haswell and later). tav-serv is 2x X5670 —
 # Westmere-EP, 2010, no AVX at all — so it tops out at x86-64-v2 and the Rocky 10
 # kernel halts before it reaches a console, whatever --cpu type the VM gets.
 # Ubuntu 24.04 runs on x86-64-v2, and Autobase's CI tests it daily.
