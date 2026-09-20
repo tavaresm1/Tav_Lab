@@ -79,16 +79,28 @@ fi
 # Must run AFTER the clone/pull: the destination directory only exists once the
 # repo is there, and this file is deliberately not in the repo.
 #
-# control-node/vault/ is bind-mounted read-only at ${VAULT_SRC}. The vault file
-# is gitignored because Tav_Lab is public, which means the container's clone
-# never contains it — copying it into inventory/group_vars/ is what makes
-# Ansible auto-load it. Copy rather than mount straight into the repo path:
-# the repo lives in a named volume, and nesting a bind mount inside it is a
-# subtlety that breaks quietly when the volume is recreated.
+# control-node/vault/ is bind-mounted at ${VAULT_SRC}. The vault file is
+# gitignored because Tav_Lab is public, which means the container's clone never
+# contains it — copying it into the group_vars tree is what makes Ansible
+# auto-load it. Copy rather than mount straight into the repo path: the repo
+# lives in a named volume, and nesting a bind mount inside it is a subtlety that
+# breaks quietly when the volume is recreated.
 #
-# The file stays encrypted; playbook runs still need --ask-vault-pass.
+# The destination is the group_vars/all/ DIRECTORY, and that is load-bearing.
+# Ansible's group_vars loader does not glob: for group `all` it looks for exactly
+# `all`, `all.yml`, `all.yaml` or `all.json`. A file named `all.vault.yml` has the
+# basename `all.vault`, which matches no group, so it is silently ignored — no
+# warning, no error, just undefined variables and a preflight assert that blames
+# the secrets for being absent. Inside a group DIRECTORY every file is loaded
+# regardless of name, which is why group_vars/all/ exists at all (main.yml is the
+# former group_vars/all.yml).
+#
+# The file stays encrypted; playbook runs still need --ask-vault-pass (or the
+# optional password file below).
 VAULT_SRC=/home/ansible/vault
-VAULT_DST="${REPO_DIR}/ansible/inventory/group_vars"
+VAULT_DST="${REPO_DIR}/ansible/inventory/group_vars/all"
+
+mkdir -p "${VAULT_DST}"
 
 shopt -s nullglob
 vault_files=("${VAULT_SRC}"/*.vault.yml)
@@ -97,14 +109,32 @@ shopt -u nullglob
 if [[ ${#vault_files[@]} -gt 0 ]]; then
     for v in "${vault_files[@]}"; do
         install -m 600 "${v}" "${VAULT_DST}/$(basename "${v}")"
-        echo "[entrypoint] vault: installed $(basename "${v}")"
+        echo "[entrypoint] vault: installed $(basename "${v}") -> inventory/group_vars/all/"
     done
 else
-    echo "[entrypoint] WARNING: no vault file found in control-node/vault/" >&2
+    echo "[entrypoint] WARNING: no *.vault.yml found in control-node/vault/" >&2
     echo "[entrypoint]   Expected control-node/vault/all.vault.yml on the host." >&2
     echo "[entrypoint]   playbooks/autobase.yml will fail its preflight assert on" >&2
     echo "[entrypoint]   vault_proxmox_api_token_secret until it is there." >&2
     echo "[entrypoint]   See control-node/README.md step 2b." >&2
+fi
+
+# Optional: control-node/vault/.vault_pass makes runs non-interactive.
+#
+# Worth having for two reasons beyond saving keystrokes. First, `--ask-vault-pass`
+# uses getpass(), which needs to turn terminal echo off — redirect a run's output
+# to a file and it warns "Can not control echo on the terminal", falls back, and
+# the read comes back mangled as "Invalid vault password was provided". That makes
+# capturing a log of a failing run surprisingly hard. Second, it is what any
+# non-interactive caller (cron, CI) would need.
+#
+# The trade-off is real and is yours to make: this is the vault password sitting
+# in cleartext on the workstation's disk. It buys convenience, not security — the
+# encryption still protects the secrets in the public repo and in transit, which
+# is what it was for. Omit the file and everything still works interactively.
+if [[ -f "${VAULT_SRC}/.vault_pass" ]]; then
+    export ANSIBLE_VAULT_PASSWORD_FILE="${VAULT_SRC}/.vault_pass"
+    echo "[entrypoint] vault: using .vault_pass — runs are non-interactive"
 fi
 
 cd "${REPO_DIR}/ansible"

@@ -70,8 +70,11 @@ ansible/
   inventory/
     hosts.ini                  Static inventory — tav-serv + the platform guests
     group_vars/                Beside the inventory, NOT beside site.yml — that
-      all.yml                  is what makes the vars load for playbooks/*.yml
-      all.vault.yml            (gitignored) ansible-vault secrets
+      all/                     is what makes the vars load for playbooks/*.yml
+        main.yml               Applies to every host (was group_vars/all.yml)
+        all.vault.yml          (gitignored) ansible-vault secrets. A DIRECTORY
+                               because the loader matches basenames to group
+                               names — group_vars/all.vault.yml would never load
       autobase.yml             THE file to edit for the Postgres platform
       autobase_guests.yml      Derived connection settings for the guests
       autobase_console.yml     Console-VM overrides
@@ -176,9 +179,21 @@ Topology, MagicDNS caveats and the corporate-resolver failure mode:
 
 ## Secrets
 
-Everything sensitive lives in `ansible/inventory/group_vars/all.vault.yml`, encrypted with
+Everything sensitive lives in `ansible/inventory/group_vars/all/all.vault.yml`, encrypted with
 `ansible-vault` and gitignored. **This repo is public** — nothing secret goes in
 plaintext, ever.
+
+> **The `all/` directory in that path is not decoration.** Ansible's group_vars
+> loader matches a file's basename against a group name and does not glob, so a
+> file at `group_vars/all.vault.yml` has the basename `all.vault`, matches no
+> group, and is **silently never loaded** — no warning, just undefined variables.
+> Inside a group *directory* every file is loaded whatever its name. This cost a
+> debugging session on 2026-09-19: the vault was present, correctly encrypted and
+> decrypting fine, while `vault_proxmox_api_token_secret` was undefined.
+>
+> If you run the control node from a container, you do not create this file
+> directly — put it in `control-node/vault/` and the entrypoint installs it here.
+> See [control-node/README.md](control-node/README.md) step 2b.
 
 | Key | Used by |
 |---|---|
@@ -187,8 +202,8 @@ plaintext, ever.
 | `vault_tailscale_authkey` | non-interactive `tailscale up` on the guests |
 
 ```bash
-ansible-vault create ansible/inventory/group_vars/all.vault.yml
-ansible-vault edit   ansible/inventory/group_vars/all.vault.yml
+ansible-vault create ansible/inventory/group_vars/all/all.vault.yml
+ansible-vault edit   ansible/inventory/group_vars/all/all.vault.yml
 ansible-playbook ... --ask-vault-pass    # or --vault-password-file ~/.vault_pass
 ```
 

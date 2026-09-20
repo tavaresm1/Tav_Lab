@@ -43,9 +43,17 @@
           - vault_proxmox_api_token_secret | default('') | length > 0
           - vault_autobase_auth_token | default('') | length > 0
         fail_msg: >-
-          Missing secrets. Run:
-          ansible-vault edit inventory/group_vars/all.vault.yml
-          and set vault_proxmox_api_token_secret and vault_autobase_auth_token.
+          Missing secrets. These variables are undefined, which means EITHER the
+          vault does not define them OR the vault is not being loaded — and the
+          second is far more likely, because it fails silently. Check in order:
+          (1) does inventory/group_vars/all/ contain a *.vault.yml file? The
+          container installs it there from the control-node/vault/ mount; look for
+          "[entrypoint] vault: installed" in the run output. (2) Is it in
+          group_vars/all/ and not group_vars/ itself? A file at
+          group_vars/all.vault.yml is NEVER loaded: the loader matches basenames
+          against group names, and "all.vault" is not a group. Inside the all/
+          directory any filename works. (3) Only then, check the contents with
+          ansible-vault view. See control-node/README.md step 2b.
 
     - name: Confirm the requested storage exists on this node
       ansible.builtin.command: "pvesm status --storage {{ pve_storage }}"

@@ -51,7 +51,7 @@ before applying.
 
 ## Secrets
 
-`ansible/inventory/group_vars/all.vault.yml` is the only place plaintext-sensitive
+`ansible/inventory/group_vars/all/all.vault.yml` is the only place plaintext-sensitive
 values should live, and it's encrypted. The vault password itself is
 **never** in the repo — either type it with `--ask-vault-pass` or store
 it at `~/.vault_pass` outside the repo and pass with `--vault-password-file`.

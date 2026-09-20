@@ -142,6 +142,41 @@ docker-compose run --rm --entrypoint ansible-vault ansible \
 `control-node/vault/` is gitignored as a whole directory, so the plaintext
 staging file above cannot be committed even if you forget to delete it.
 
+**Where it lands, and why that matters.** The entrypoint installs every
+`*.vault.yml` it finds into `inventory/group_vars/all/` — the group *directory*,
+not `group_vars/` itself. Ansible's group_vars loader matches a file's basename
+against a group name and does not glob, so `group_vars/all.vault.yml` has the
+basename `all.vault`, matches no group, and is **silently never loaded**: no
+warning, no error, just undefined variables and a preflight assert that reads as
+if the secrets were missing. Inside a group directory any filename is loaded.
+Look for this line in the run output:
+
+```
+[entrypoint] vault: installed all.vault.yml -> inventory/group_vars/all/
+```
+
+#### Optional — skip the password prompt
+
+```bash
+printf '%s' 'your-vault-password' > vault/.vault_pass
+chmod 600 vault/.vault_pass
+```
+
+The entrypoint sets `ANSIBLE_VAULT_PASSWORD_FILE` when that file exists, and runs
+stop prompting. Two reasons to want it beyond keystrokes:
+
+- `--ask-vault-pass` uses `getpass()`, which needs to disable terminal echo.
+  Redirect a run's output to a file and it warns `Can not control echo on the
+  terminal`, falls back, and the password read comes back mangled as
+  `Invalid vault password was provided` — which makes capturing a log of a
+  *failing* run unexpectedly difficult.
+- Anything non-interactive (cron, CI) needs it.
+
+The trade-off is yours: this is the vault password in cleartext on the
+workstation. It buys convenience, not security — the encryption is there to
+protect secrets in a public repo, and it still does. Leave the file out and
+everything works interactively.
+
 ### Step 3 — install the control pubkey on tav-serv
 
 Get `ssh_keys/ansible_control.pub` appended to `/root/.ssh/authorized_keys` on

@@ -102,7 +102,7 @@ same key you hand the Console in step 5.
 **Secrets** into the vault (already gitignored, see the README):
 
 ```bash
-ansible-vault edit ansible/inventory/group_vars/all.vault.yml
+ansible-vault edit ansible/inventory/group_vars/all/all.vault.yml
 ```
 
 ```yaml
