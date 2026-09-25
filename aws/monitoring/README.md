@@ -390,17 +390,25 @@ a non-zero exit if anything failed:
 
 `--no-aws` skips layer 2. `MON_HOST=localhost` to run it on the node itself.
 
-**Run it from somewhere on the tailnet.** The Windows workstation isn't currently a
-tailnet member, so every layer-3 check will fail there no matter how healthy the node
-is. From `pve`:
+**Run it from somewhere on the tailnet.** The Linux Mint workstation is a tailnet
+member, so just run it there directly. The MathWorks-managed Windows laptop is **not**
+one — every layer-3 check fails there regardless of how healthy the node is. To run it
+on another host without cloning the repo:
 
 ```bash
 ssh root@192.168.1.226 'MON_HOST=mon-aws CHILDREN=pve bash -s' < healthcheck.sh
 ```
 
+Use `bash healthcheck.sh` rather than `./healthcheck.sh` if the exec bit is missing —
+it doesn't survive a clone made on Windows. Don't use `sudo`: the script is read-only
+and needs *your* AWS credentials and *your* tailscale session, both of which root lacks.
+
 It forces `curl --noproxy '*'`, which matters on a corporate-managed machine: with
 `http_proxy` set, curl sends tailnet requests to the company proxy, which has no route
 to `100.64.0.0/10` and returns **502** — indistinguishable from a broken service.
+
+A fully healthy `FullStack` deployment with the hypervisor onboarded reads
+**24 PASS / 0 WARN / 0 FAIL** (first achieved 2026-09-25).
 
 ## 4.1 Manual checks
 
@@ -465,13 +473,13 @@ from there — which is why this stack needs no `prometheus-pve-exporter`.
 ND_KEY=$(aws ssm get-parameter --name /monitoring/netdata-stream-key \
   --with-decryption --query Parameter.Value --output text)
 
-<<<<<<< HEAD
-scp home-node/install-child.sh home-node/config.alloy root@tav-serv:/tmp/
-ssh root@tav-serv "cd /tmp && MON_HOST=mon-aws ND_KEY=$ND_KEY bash install-child.sh"
-=======
-scp home-node/install-child.sh home-node/config.alloy root@192.168.1.226:/tmp/
-ssh root@192.168.1.226 "cd /tmp && MON_HOST=mon-aws ND_KEY=$ND_KEY bash install-child.sh"
->>>>>>> dd2b55c42d0dbbdaead84ccd33016f8a6d3173b3
+# one command, so it cannot half-run: ships both files and executes them.
+# Doing it as separate scp + ssh steps repeatedly failed with
+# "bash: install-child.sh: No such file or directory" because the scp got skipped.
+# config.alloy must travel too -- the script reads it from its own directory.
+tar cz -C home-node install-child.sh config.alloy \
+  | ssh root@192.168.1.226 'mkdir -p /tmp/mon && tar xz -C /tmp/mon && cd /tmp/mon &&
+      MON_HOST=mon-aws ND_KEY='"$ND_KEY"' SEND_LOGS=yes bash install-child.sh'
 ```
 
 The script installs Netdata as a child (`memory mode = ram`, local health disabled so
@@ -482,15 +490,19 @@ nothing.
 Verify within about a minute:
 
 ```bash
-<<<<<<< HEAD
-ssh root@tav-serv "systemctl status netdata alloy --no-pager | grep -E 'Active|●'"
-=======
 ssh root@192.168.1.226 "systemctl status netdata alloy --no-pager | grep -E 'Active|●'"
->>>>>>> dd2b55c42d0dbbdaead84ccd33016f8a6d3173b3
 ```
 
-Then check <http://mon-aws:19999> — `tav-serv` should appear in the node list on the
-left.
+Then check <http://mon-aws:19999>. The hypervisor appears under its **own hostname**,
+which is `pve` — not `tav-serv`. A Netdata child registers whatever `hostname` returns,
+so that is also the value to pass to `healthcheck.sh`:
+
+```bash
+CHILDREN="pve" ./healthcheck.sh
+```
+
+If it does *not* appear, read the `allow from` note in [Part 10](#part-10--troubleshooting)
+**before** suspecting the api key. That mistake cost a day on 2026-09-25.
 
 ## 5.2 Guest VMs and containers
 
@@ -705,6 +717,12 @@ See [3.3](#33-deploy-the-monitoring-node) for how to read the stage markers.
 | `aws ssm start-session` fails | Missing plugin (step 1.2), or the instance has no outbound internet to reach SSM endpoints. |
 | "Netdata on pve only listens on 127.0.0.1, it's unreachable from outside" | **Not a fault — that is the design.** `install-child.sh` sets `bind to = 127.0.0.1` deliberately. A child never accepts connections; it opens an *outbound* stream to the parent and pushes metrics up it. Do not open 19999 on `pve` or poke a hole in the Proxmox firewall: it buys nothing and costs you a listening service. The correct test of a child is whether it appears in the **parent's** node list — `./healthcheck.sh` does exactly that. |
 | Every service check fails with HTTP 502 | Your shell has `http_proxy`/`HTTPS_PROXY` set and curl is routing tailnet requests through the corporate proxy, which can't reach `100.64.0.0/10`. `healthcheck.sh` already passes `--noproxy '*'`; if testing by hand, do the same. |
+| **Parent is healthy but mirrors only itself — no child ever appears** | **Check `allow from` in the parent's `/etc/netdata/stream.conf` first, before the api key.** It takes netdata **simple patterns (globs), not CIDR**. The bootstrap originally wrote `allow from = 100.64.0.0/10 127.0.0.1`; netdata compares that as a literal string, so it matched no child and silently refused every one — while the parent kept mirroring *itself* (via the literal `127.0.0.1`) and so looked perfectly alive. Correct value is `allow from = 100.* 127.0.0.1`. Diagnose decisively by widening to `allow from = *` and restarting netdata: children appear within ~20s if this was it. Safe to test because the security group has zero inbound rules. Fixed in the template 2026-09-25; cost a day, and three separate agents all misdiagnosed it as a key mismatch. |
+| Child configured correctly but rejected | The parent's `stream.conf` is written **once at bootstrap** and does **not** follow later SSM changes, so **SSM is not authoritative — the parent's `[section]` header is.** Rotating the SSM key alone breaks streaming. Compare them: `ssh root@mon-aws 'grep "^\[" /etc/netdata/stream.conf'` against `aws ssm get-parameter --name /monitoring/netdata-stream-key --with-decryption --query Parameter.Value --output text`. Multiple `[key]` sections are allowed, which is what makes a zero-downtime rotation possible: add the new section, move the children, then remove the old one. |
+| `ip-10-30-1-101` in the node list looks like stray config | It isn't. That's the parent's own hostname (EC2 derives it from the private IP) and a parent always mirrors itself. Cosmetic fix: set `hostname = mon-aws` in `/etc/netdata/netdata.conf`. |
+| Alarms are `OK`, stack is `CREATE_COMPLETE`, but no email ever arrives | The SNS topic has **zero subscriptions**. An inline `Subscription:` property on `AWS::SNS::Topic` is write-once — CFN creates it and never reconciles it, so one click on the unsubscribe link in any SNS email kills delivery permanently and silently. Fixed 2026-09-25: it's now a standalone `AWS::SNS::Subscription` resource. To restore delivery on a *running* stack, subscribe by hand and click the confirmation — **do not** run a stack update for this, because a `UserData` diff replaces the instance. `healthcheck.sh` treats both zero and `PendingConfirmation` as FAIL. |
+| `install-child.sh` → `No such file or directory` | The script was never copied to the target. Use the single `tar cz \| ssh` form in [5.1](#51-the-proxmox-host--do-this-one-first) so the copy can't be skipped, and remember `config.alloy` must travel with it. |
+| Child's config isn't where you expect | Netdata's kickstart falls back to a **static** install under `/opt/netdata` on any distro it can't identify (e.g. Linux Mint), so the config is `/opt/netdata/etc/netdata/`, not `/etc/netdata/`, and it logs to the journal rather than `error.log`. Debian/Proxmox gets native packages and `/etc/netdata/`. `install-child.sh` detects this; commands you type by hand do not. |
 | Home node not in Netdata's node list | Key mismatch. Compare `/etc/netdata/stream.conf` on the child against SSM. Then `journalctl -u netdata -n 100` on both ends. |
 | Netdata child connects then drops | Parent's `allow from` doesn't cover the source. Children arrive from `100.64.0.0/10`; confirm the child connects over the tailnet, not a public path. |
 | Loki query returns nothing | Alloy. `journalctl -u alloy -n 50` on the child. Usually the `systemd-journal` group membership didn't take — needs a service restart. |
