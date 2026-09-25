@@ -12,7 +12,7 @@
       }
     ]
   },
-  "description": "Journal logs shipped from home nodes by Grafana Alloy into Loki. METRICS ARE NOT HERE -- there is no Prometheus datasource; metrics live in Netdata on :19999 (see the dashboard link above). Loki retention is 720h / 30 days. Only hosts running install-child.sh appear: mon-aws does not ship its own journal.",
+  "description": "Journal logs shipped from home nodes by Grafana Alloy into Loki. METRICS ARE NOT HERE -- there is no Prometheus datasource; metrics live in Netdata on :19999 (see the dashboard link above). Loki retention is 720h / 30 days. Only hosts running install-child.sh appear: mon-aws does not ship its own journal. Verified against the live label set on 2026-09-25: job='loki.source.journal.journal' (NOT the 'systemd-journal' config.alloy asks for), level uses 'error' rather than the journal's own 'err' abbreviation, and 4 hosts were shipping. All selectors are variables so none of that is baked in.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -78,7 +78,7 @@
         {
           "datasource": {"type": "loki", "uid": "${ds}"},
           "editorMode": "code",
-          "expr": "sum(count_over_time({job=\"systemd-journal\", host=~\"$host\"}[$__range]))",
+          "expr": "sum(count_over_time({job=~\"$job\", host=~\"$host\"}[$__range]))",
           "queryType": "instant",
           "refId": "A"
         }
@@ -119,7 +119,7 @@
         {
           "datasource": {"type": "loki", "uid": "${ds}"},
           "editorMode": "code",
-          "expr": "sum(count_over_time({job=\"systemd-journal\", host=~\"$host\", level=~\"err|crit|alert|emerg\"}[$__range]))",
+          "expr": "sum(count_over_time({job=~\"$job\", host=~\"$host\", level=~\"err|error|crit|alert|emerg\"}[$__range]))",
           "queryType": "instant",
           "refId": "A"
         }
@@ -160,7 +160,7 @@
         {
           "datasource": {"type": "loki", "uid": "${ds}"},
           "editorMode": "code",
-          "expr": "sum(count_over_time({job=\"systemd-journal\", host=~\"$host\", level=\"warning\"}[$__range]))",
+          "expr": "sum(count_over_time({job=~\"$job\", host=~\"$host\", level=\"warning\"}[$__range]))",
           "queryType": "instant",
           "refId": "A"
         }
@@ -170,7 +170,7 @@
     },
     {
       "datasource": {"type": "loki", "uid": "${ds}"},
-      "description": "Distinct hosts that shipped at least one line in the range. This is the panel that tells you a child has gone silent -- if it drops, an Alloy agent has stopped, which Netdata's own child check will NOT catch (Netdata streaming and log shipping are independent paths).",
+      "description": "Distinct hosts that shipped at least one line in the range. This is the panel that tells you a shipper has gone silent -- if it drops, an Alloy agent has stopped, which Netdata's own child check will NOT catch (Netdata streaming and log shipping are independent paths). Green at 4 because that is what was shipping on 2026-09-25: Tavares-lab, hermes, kieran-craft, pve. Note only pve and Tavares-lab are ALSO Netdata children -- hermes and kieran-craft send logs but no metrics, and mon-aws sends neither to Loki. Raise this threshold when you add a shipper, or it stops meaning anything.",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
@@ -179,7 +179,7 @@
             "mode": "absolute",
             "steps": [
               {"color": "red", "value": null},
-              {"color": "green", "value": 2}
+              {"color": "green", "value": 4}
             ]
           },
           "unit": "short"
@@ -201,7 +201,7 @@
         {
           "datasource": {"type": "loki", "uid": "${ds}"},
           "editorMode": "code",
-          "expr": "count(sum by (host) (count_over_time({job=\"systemd-journal\"}[$__range])))",
+          "expr": "count(sum by (host) (count_over_time({job=~\"$job\"}[$__range])))",
           "queryType": "instant",
           "refId": "A"
         }
@@ -261,7 +261,7 @@
         {
           "datasource": {"type": "loki", "uid": "${ds}"},
           "editorMode": "code",
-          "expr": "sum by (host) (rate({job=\"systemd-journal\", host=~\"$host\"}[$__interval]))",
+          "expr": "sum by (host) (rate({job=~\"$job\", host=~\"$host\"}[$__interval]))",
           "legendFormat": "{{host}}",
           "queryType": "range",
           "refId": "A"
@@ -305,6 +305,7 @@
           {"matcher": {"id": "byName", "options": "emerg"}, "properties": [{"id": "color", "value": {"fixedColor": "dark-red", "mode": "fixed"}}]},
           {"matcher": {"id": "byName", "options": "alert"}, "properties": [{"id": "color", "value": {"fixedColor": "dark-red", "mode": "fixed"}}]},
           {"matcher": {"id": "byName", "options": "crit"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]},
+          {"matcher": {"id": "byName", "options": "error"}, "properties": [{"id": "color", "value": {"fixedColor": "semi-dark-red", "mode": "fixed"}}]},
           {"matcher": {"id": "byName", "options": "err"}, "properties": [{"id": "color", "value": {"fixedColor": "semi-dark-red", "mode": "fixed"}}]},
           {"matcher": {"id": "byName", "options": "warning"}, "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]},
           {"matcher": {"id": "byName", "options": "notice"}, "properties": [{"id": "color", "value": {"fixedColor": "blue", "mode": "fixed"}}]},
@@ -323,7 +324,7 @@
         {
           "datasource": {"type": "loki", "uid": "${ds}"},
           "editorMode": "code",
-          "expr": "sum by (level) (rate({job=\"systemd-journal\", host=~\"$host\"}[$__interval]))",
+          "expr": "sum by (level) (rate({job=~\"$job\", host=~\"$host\"}[$__interval]))",
           "legendFormat": "{{level}}",
           "queryType": "range",
           "refId": "A"
@@ -372,7 +373,7 @@
         {
           "datasource": {"type": "loki", "uid": "${ds}"},
           "editorMode": "code",
-          "expr": "topk(15, sum by (host, unit) (count_over_time({job=\"systemd-journal\", host=~\"$host\"}[$__range])))",
+          "expr": "topk(15, sum by (host, unit) (count_over_time({job=~\"$job\", host=~\"$host\"}[$__range])))",
           "legendFormat": "{{host}} / {{unit}}",
           "queryType": "instant",
           "refId": "A"
@@ -425,7 +426,7 @@
         {
           "datasource": {"type": "loki", "uid": "${ds}"},
           "editorMode": "code",
-          "expr": "sum by (unit) (rate({job=\"systemd-journal\", host=~\"$host\", level=~\"err|crit|alert|emerg\"}[$__interval]))",
+          "expr": "sum by (unit) (rate({job=~\"$job\", host=~\"$host\", level=~\"err|error|crit|alert|emerg\"}[$__interval]))",
           "legendFormat": "{{unit}}",
           "queryType": "range",
           "refId": "A"
@@ -462,7 +463,7 @@
         {
           "datasource": {"type": "loki", "uid": "${ds}"},
           "editorMode": "code",
-          "expr": "{job=\"systemd-journal\", host=~\"$host\", level=~\"warning|err|crit|alert|emerg\"}",
+          "expr": "{job=~\"$job\", host=~\"$host\", level=~\"warning|err|error|crit|alert|emerg\"}",
           "queryType": "range",
           "refId": "A"
         }
@@ -490,7 +491,7 @@
         {
           "datasource": {"type": "loki", "uid": "${ds}"},
           "editorMode": "code",
-          "expr": "{job=\"systemd-journal\", host=~\"$host\", unit=~\"$unit\"} |= \"$search\"",
+          "expr": "{job=~\"$job\", host=~\"$host\", unit=~\"$unit\"} |= \"$search\"",
           "queryType": "range",
           "refId": "A"
         }
@@ -518,6 +519,25 @@
         "regex": "",
         "skipUrlSync": false,
         "type": "datasource"
+      },
+      {
+        "allValue": ".+",
+        "current": {},
+        "datasource": {"type": "loki", "uid": "${ds}"},
+        "definition": "label_values(job)",
+        "description": "allValue is '.+' and NOT '.*' on purpose. Loki rejects a query whose every matcher is empty-compatible -- '.*' matches the empty string, so {job=~\".*\"} fails with 'queries require at least one regexp or equality matcher that does not have an empty-compatible value'. This is also why job is a variable at all: Alloy currently reports job='loki.source.journal.journal' (its own component id) rather than the 'systemd-journal' that config.alloy asks for, and a hardcoded value would silently match nothing.",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Job",
+        "multi": true,
+        "name": "job",
+        "options": [],
+        "query": "label_values(job)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
       },
       {
         "allValue": ".*",

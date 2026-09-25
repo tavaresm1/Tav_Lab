@@ -22,6 +22,22 @@ loki.relabel "journal" {
     source_labels = ["__journal__systemd_unit"]
     target_label  = "unit"
   }
+  // Collapse per-login session scopes into one label value. Observed
+  // 2026-09-25: the live `unit` label held ~60 distinct session-NN.scope
+  // values, one per login since the agents started, and the count only ever
+  // grows. Each is a separate Loki stream, and Loki's memory and cost scale
+  // with STREAM COUNT rather than bytes -- so this was the dominant cost in
+  // the whole log pipeline, generated entirely by noise nobody will ever query
+  // by name. `session-c3.scope` exists too, hence [a-z0-9]+ and not \d+.
+  //
+  // A rule whose regex does not match is skipped, so this overwrites `unit`
+  // only for session scopes and leaves every real unit name untouched.
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    regex         = "session-[a-z0-9]+\\.scope"
+    target_label  = "unit"
+    replacement   = "user-session"
+  }
   rule {
     source_labels = ["__journal__hostname"]
     target_label  = "host"
@@ -29,6 +45,25 @@ loki.relabel "journal" {
   rule {
     source_labels = ["__journal_priority_keyword"]
     target_label  = "level"
+  }
+  // Force the job label here rather than trusting the `labels` argument on
+  // loki.source.journal above. That argument asks for job="systemd-journal"
+  // and does NOT win: the live label value on 2026-09-25 was
+  // "loki.source.journal.journal", i.e. Alloy's own component id. Relabel
+  // rules run last, so setting it here is deterministic.
+  //
+  // This is worth knowing because it is invisible: a dashboard written against
+  // the value you configured matches zero lines while Loki is perfectly
+  // healthy and full of data. Always read the label back from
+  // /loki/api/v1/label/job/values rather than from this file.
+  //
+  // Changing it means existing streams keep the old job value until they age
+  // out of the 720h retention window, so query with job=~".+" across the
+  // transition. dashboards/journal-logs.json uses a $job variable for exactly
+  // this reason and needs no edit either way.
+  rule {
+    target_label = "job"
+    replacement  = "systemd-journal"
   }
 }
 

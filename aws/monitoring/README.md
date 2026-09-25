@@ -780,11 +780,38 @@ for l in job host unit level; do
 done
 ```
 
-Expect `job` = `systemd-journal`, `host` = your children, `unit` = a long list, and
-`level` = journal priority keywords (`err`, `warning`, `info`, ...). `level` is the one
-to watch: it comes from `__journal_priority_keyword`, a field Alloy derives from the
-numeric `PRIORITY` rather than one the journal ships, so it is the most likely of the
-four to be empty if the Alloy version changes.
+**What that actually returned on 2026-09-25, versus what `config.alloy` says:**
+
+| Label | Configured | Live | Note |
+|---|---|---|---|
+| `job` | `systemd-journal` | **`loki.source.journal.journal`** | The `labels` argument loses to Alloy's component id. Now forced by a relabel rule instead — relabel runs last. |
+| `host` | — | `Tavares-lab`, `hermes`, `kieran-craft`, `pve` | **Four** shippers, not two. |
+| `unit` | — | ~80 values, **~60 of them `session-NN.scope`** | Cardinality. Now collapsed to `user-session`. |
+| `level` | — | `alert`, `crit`, **`error`**, `info`, `notice`, `warning`, `debug` | **`error`, not the journal's `err`.** |
+
+Those last two rows are the ones that silently break things, and both did:
+
+- **`job` was wrong, so every query matched nothing.** A dashboard written against the
+  value you configured returns zero rows while Loki is healthy and full of data — there
+  is no error, just empty panels. **Always read the label back from the API, never from
+  `config.alloy`.**
+- **Loki regex matchers are fully anchored**, so `level=~"err|..."` does *not* match
+  `error`. An error panel reads `0` while errors are arriving. The dashboard now matches
+  `err|error|crit|alert|emerg` to cover both spellings.
+
+`level` remains the fragile one: it comes from `__journal_priority_keyword`, which Alloy
+*derives* from the numeric `PRIORITY` rather than a field the journal ships, so it is the
+likeliest to change or vanish across Alloy versions.
+
+**The log and metric paths do not cover the same hosts.** `hermes` and `kieran-craft`
+ship logs but are not Netdata children, `mon-aws` ships neither, and only `pve` and
+`Tavares-lab` do both. So neither system alone tells you a host is healthy.
+
+To pick up the `config.alloy` fixes, re-run `install-child.sh` on each shipper. Not
+urgent — the dashboard works against either label set — but until you do, `job` stays
+`loki.source.journal.journal` and the session-scope streams keep accumulating. Existing
+streams also keep their old `job` value until they age out of the 720h window, so query
+with `job=~".+"` across the transition.
 
 Two panels are worth understanding rather than just reading:
 
