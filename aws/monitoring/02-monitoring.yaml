@@ -522,13 +522,30 @@ Resources:
           # start before tailscale0 exists on boot; the empty security group and
           # this allow-list are the actual controls.
           # Trace off: the section header is the streaming key.
+          # 'allow from' takes netdata SIMPLE PATTERNS -- shell-style globs -- and
+          # NOT CIDR. This previously read '100.64.0.0/10 127.0.0.1', which netdata
+          # compares as a literal string against the peer address. It therefore
+          # matched nothing, and every child was refused while the parent itself
+          # still worked because 127.0.0.1 happened to be a literal match.
+          #
+          # That failure is close to undiagnosable from the outside: the key was
+          # correct, the parent was healthy and reachable, no rejection appeared in
+          # the parent's node list, and the parent kept mirroring itself so it looked
+          # alive. Cost roughly a day. Confirmed 2026-09-25 by widening to '*', at
+          # which point pve appeared within 20 seconds.
+          #
+          # '100.*' is wider than Tailscale's CGNAT range (100.64.0.0/10), because a
+          # glob cannot express 100.64-100.127 without five error-prone alternations.
+          # That is acceptable here and ONLY here: the security group has zero inbound
+          # rules, so :19999 is unreachable except across the tailnet. This ACL is
+          # defence in depth, not the boundary. Do not copy it somewhere exposed.
           { set +x; } 2>/dev/null
           cat > /etc/netdata/stream.conf <<STREAMCONF
           [$NDKEY]
               enabled = yes
               default memory mode = dbengine
               health enabled by default = auto
-              allow from = 100.64.0.0/10 127.0.0.1
+              allow from = 100.* 127.0.0.1
           STREAMCONF
           set -x
           echo "wrote /etc/netdata/stream.conf (api key suppressed)"
