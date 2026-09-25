@@ -25,6 +25,11 @@
 #   TS_HOSTNAME         default mon-aws
 #   TS_TAG              default tag:monitor
 #   ALERT_EMAIL         optional; enables SNS + EC2 status-check alarms
+#   ADMIN_USER          optional; named passwordless local admin for Tailscale SSH.
+#                       Must ALSO be added to the Tailscale ACL ssh "users" list.
+#                       Blank = use the AMI's 'ubuntu' account, which already works.
+#   ADMIN_SSH_KEY       optional OpenSSH PUBLIC key for ADMIN_USER. A public key is
+#                       not a secret, so unlike TS_KEY/ND_KEY it may be passed here.
 #   PUBLIC_IPV4         true | false   default true
 #   DISABLE_ROLLBACK    1 = leave a failed stack standing so you can read the
 #                       bootstrap log instead of losing it to rollback
@@ -43,6 +48,8 @@ DATA_GB="${DATA_GB:-100}"
 TS_HOSTNAME="${TS_HOSTNAME:-mon-aws}"
 TS_TAG="${TS_TAG:-tag:monitor}"
 ALERT_EMAIL="${ALERT_EMAIL:-}"
+ADMIN_USER="${ADMIN_USER:-}"
+ADMIN_SSH_KEY="${ADMIN_SSH_KEY:-}"
 PUBLIC_IPV4="${PUBLIC_IPV4:-true}"
 LOG_GROUP="${LOG_GROUP:-/tavlab/monitoring-bootstrap}"
 SINCE="${SINCE:-24h}"
@@ -137,6 +144,35 @@ cmd_preflight() {
     if have_param "$p"; then echo "  ok    $p exists"
     else echo "  todo  $p missing -- run './deploy.sh secrets'"; fi
   done
+
+  # ADMIN_SSH_KEY goes into the template as a plain CFN parameter, so it lands in
+  # stack history and 'describe-stacks' output forever. That is fine for a PUBLIC
+  # key and catastrophic for a private one, and the two are one tab-completion
+  # apart (id_ed25519 vs id_ed25519.pub). Refuse the private form outright --
+  # there is no recovering a key once it is in stack events.
+  if [ -n "$ADMIN_SSH_KEY" ]; then
+    case "$ADMIN_SSH_KEY" in
+      *PRIVATE\ KEY*)
+        echo "  FAIL  ADMIN_SSH_KEY looks like a PRIVATE key. It would be stored in"
+        echo "        CloudFormation stack history in cleartext. Use the .pub file."
+        fail=1 ;;
+      ssh-ed25519\ *|ssh-rsa\ *|ecdsa-sha2-*\ *|sk-ssh-*\ *|sk-ecdsa-*\ *)
+        echo "  ok    ADMIN_SSH_KEY looks like a public key (${ADMIN_SSH_KEY%% *})" ;;
+      *)
+        echo "  FAIL  ADMIN_SSH_KEY is not a recognisable OpenSSH public key."
+        echo "        Expected the one-line contents of e.g. ~/.ssh/id_ed25519.pub"
+        fail=1 ;;
+    esac
+  fi
+
+  # Tailscale SSH refuses a target user that the ACL does not list, and the
+  # failure looks like a plain login rejection rather than a policy problem.
+  # Cannot be checked from here -- the ACL lives in the Tailscale console -- so
+  # say it out loud instead of letting it be discovered at ssh time.
+  if [ -n "$ADMIN_USER" ]; then
+    echo "  note  ADMIN_USER=$ADMIN_USER -- add \"$ADMIN_USER\" to the \"users\" list in"
+    echo "        the Tailscale ACL ssh block, or 'ssh $ADMIN_USER@$TS_HOSTNAME' is refused."
+  fi
 
   [ "$fail" -eq 0 ] || die "preflight failed; fix the FAIL lines above"
   echo "  preflight passed"
@@ -240,6 +276,8 @@ cmd_monitoring() {
       TailscaleTag="$TS_TAG" \
       AssignPublicIpv4="$PUBLIC_IPV4" \
       AlertEmail="$ALERT_EMAIL" \
+      AdminUsername="$ADMIN_USER" \
+      AdminSshPublicKey="$ADMIN_SSH_KEY" \
       TailscaleAuthKeyParam="$TS_KEY_PARAM" \
       NetdataStreamKeyParam="$ND_KEY_PARAM" \
       GrafanaPasswordParam="$GF_PW_PARAM" \

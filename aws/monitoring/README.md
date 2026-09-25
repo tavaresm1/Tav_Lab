@@ -205,6 +205,21 @@ a key can carry it. Minimum working policy:
 
 Save. Tailscale validates it on save — fix any error before continuing.
 
+### The `users` list is what makes SSH work — and it is not obvious
+
+`tailscale up --ssh` means SSH to this node is authenticated by **tailnet identity**:
+no key, no password, no `authorized_keys`. The `users` list above is the authorisation
+decision — it names which *local* accounts a tailnet member may become.
+
+So `ssh ubuntu@mon-aws` and `ssh root@mon-aws` work today with no credential at all.
+If you deploy with `ADMIN_USER=alice`, **you must add `"alice"` to this list too**, or
+Tailscale refuses the connection — and the refusal looks like an ordinary login
+failure, not a policy error, which sends you looking at the node instead of the ACL.
+
+Consider narrowing rather than widening: dropping `"root"` once a named admin with
+`sudo` exists removes direct remote root while costing you nothing, because the named
+account has passwordless `sudo`.
+
 ## 2.2 Generate a tagged auth key
 
 <https://login.tailscale.com/admin/settings/keys> → **Generate auth key**:
@@ -363,6 +378,87 @@ password command, and the break-glass command.
 
 If you set `ALERT_EMAIL`, **check your inbox and confirm the SNS subscription** — an
 unconfirmed subscription silently delivers nothing.
+
+## 3.5 Getting a shell
+
+Two ways in, and **neither uses an SSH key or a password**. The security group has
+zero inbound rules, so there is no port to attack in the first place.
+
+```bash
+ssh ubuntu@mon-aws          # works immediately, no setup at all
+ssh root@mon-aws            # also works; both are in the ACL users list
+```
+
+`ubuntu` ships with the Ubuntu AMI and already has passwordless `sudo` via
+`/etc/sudoers.d/90-cloud-init-users`. **For most purposes you need nothing more than
+this.** Verify with:
+
+```bash
+ssh ubuntu@mon-aws 'whoami; sudo -n true && echo "sudo ok"; groups'
+```
+
+### A named admin instead
+
+If you want your own account rather than the generic one, deploy with `ADMIN_USER`:
+
+```bash
+ADMIN_USER=mtavares \
+ADMIN_SSH_KEY="$(cat ~/.ssh/id_ed25519.pub)" \
+  MODE=FullStack ALERT_EMAIL=you@example.com ./deploy.sh monitoring
+```
+
+`ADMIN_SSH_KEY` is optional; Tailscale SSH needs no key. Both are optional.
+
+The account is created with its **password locked**. That is deliberate:
+
+- Tailscale SSH already authenticates by tailnet identity, so a password would add no
+  security. It would *subtract* some — a guessable credential where there was none,
+  and the only credential on the box not held in SSM.
+- Because the password is locked, `sudo` group membership alone would leave `sudo`
+  **unusable** — it would prompt for a password nothing can satisfy. The template
+  therefore also writes `/etc/sudoers.d/90-<user>` with `NOPASSWD:ALL`, mirroring
+  what the AMI already does for `ubuntu`.
+
+**Two things that bite:**
+
+1. **Add the username to the Tailscale ACL `users` list** (§2.1) or the SSH is
+   refused, and the error looks like a normal login failure rather than policy.
+   `./deploy.sh preflight` reminds you when `ADMIN_USER` is set.
+2. **`UserData` changes force instance replacement.** Adding `ADMIN_USER` to an
+   *existing* stack will **destroy and rebuild the node** — which means a fresh
+   Tailscale auth key, and a bad key is what killed the first two deploys. To get the
+   account onto the running node without a rebuild, do it by hand (below) and keep the
+   template change purely for the next rebuild. Run `./deploy.sh monitoring` with the
+   new variables only when you actually intend to replace the instance.
+
+To add it to the **live** node with no rebuild — same result as the template produces:
+
+```bash
+U=mtavares
+ssh root@mon-aws "
+  id -u $U >/dev/null 2>&1 || useradd -m -s /bin/bash $U
+  usermod -aG sudo,docker,adm,systemd-journal $U
+  passwd -l $U
+  printf '%s ALL=(ALL) NOPASSWD:ALL\n' $U > /tmp/s.new
+  visudo -cf /tmp/s.new && install -m 0440 -o root -g root /tmp/s.new /etc/sudoers.d/90-$U
+  rm -f /tmp/s.new
+  id $U"
+```
+
+Then add `"mtavares"` to the ACL `users` list and `ssh mtavares@mon-aws`.
+
+### If Tailscale itself is down
+
+Neither path above works — the node has no open ports. SSM Session Manager is the
+only way in, and it goes through the AWS API rather than the network:
+
+```bash
+aws ssm start-session --target "$(aws cloudformation describe-stack-resources \
+  --stack-name mon-node --logical-resource-id MonitorInstance \
+  --query 'StackResources[0].PhysicalResourceId' --output text)"
+```
+
+Needs `session-manager-plugin` locally; `./deploy.sh preflight` warns if it is absent.
 
 ---
 
@@ -727,6 +823,9 @@ See [3.3](#33-deploy-the-monitoring-node) for how to read the stage markers.
 | Netdata child connects then drops | Parent's `allow from` doesn't cover the source. Children arrive from `100.64.0.0/10`; confirm the child connects over the tailnet, not a public path. |
 | Loki query returns nothing | Alloy. `journalctl -u alloy -n 50` on the child. Usually the `systemd-journal` group membership didn't take — needs a service restart. |
 | Grafana won't accept the password | Read it from SSM (Part 8). If it was rotated in SSM after boot, Grafana still has the original in its own DB. |
+| Grafana: "Unable to retrieve metric names" / "unable to connect to your data source (Internal Server Error)" | **Not a fault.** You are in **Explore → Metrics**, which needs a **Prometheus** datasource, and there isn't one — only Loki is provisioned. Grafana falls back to the built-in `-- Grafana --` pseudo-datasource (`var-ds=grafana` in the URL), which has no metrics API, so it 500s with `data source not found`. Metrics live in **Netdata's own UI on :19999**, which is the metrics front end for all hosts; use Grafana for **Explore → Logs → Loki**. Confirm Loki itself is fine with `curl -s -u admin:$GFPASS http://mon-aws:3000/api/datasources/1/health` → `"status":"OK"`. Datasource ids other than `1` do not exist, so probing `/api/datasources/2/health` returns this same misleading error. Wanting metrics *in* Grafana means adding a real Prometheus that scrapes `mon-aws:19999/api/v1/allmetrics?format=prometheus` — Netdata's endpoint is a scrape target, not a query API, so it cannot back a Prometheus datasource directly. |
+| `ssh <user>@mon-aws` refused, but `ssh ubuntu@mon-aws` works | The username isn't in the Tailscale ACL `ssh` block's `users` list (§2.1). Tailscale SSH authorises per *local account*, and the refusal is indistinguishable from an ordinary login failure, so this sends you to the node when the problem is in the policy. Creating the account on the box is only half the job. |
+| Named admin exists, `sudo` asks for a password you never set | Expected if the account was created without the sudoers drop-in: the password is deliberately locked, so `%sudo` group membership alone leaves `sudo` unusable. Needs `/etc/sudoers.d/90-<user>` with `NOPASSWD:ALL` — see [3.5](#35-getting-a-shell). Always `visudo -cf` before installing it; a malformed sudoers file breaks `sudo` for everyone including root recovery. |
 | `/data` not mounted, containers won't start | Volume detection failed. `lsblk`, then check the device-detection block in the bootstrap log. |
 | Everything worked, then died after a reboot | `docker` enabled? `systemctl is-enabled docker`. Containers use `restart: unless-stopped`, so they should return on their own. |
 

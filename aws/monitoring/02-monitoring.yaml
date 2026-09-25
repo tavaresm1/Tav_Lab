@@ -15,6 +15,8 @@ Metadata:
         Parameters: [InstanceType, DeploymentMode, DataVolumeSizeGb, DataVolumeDeleteOnTermination, LatestUbuntuAmi]
       - Label: {default: Tailscale}
         Parameters: [TailscaleHostname, TailscaleTag, TailscaleAuthKeyParam]
+      - Label: {default: Admin access}
+        Parameters: [AdminUsername, AdminSshPublicKey]
       - Label: {default: Secrets and alerting}
         Parameters: [NetdataStreamKeyParam, GrafanaPasswordParam, AlertEmail]
       - Label: {default: Diagnostics}
@@ -88,6 +90,27 @@ Parameters:
       BEFORE deploying (see README). Never passed as a CFN parameter value, so it
       does not land in UserData or stack history.
 
+  AdminUsername:
+    Type: String
+    Default: ''
+    Description: >
+      Optional. Creates a named local admin you can 'ssh <user>@hostname' as. The
+      account has NO PASSWORD -- authentication is Tailscale SSH (tailnet identity)
+      and/or the public key below. Leave blank to rely on the AMI's 'ubuntu' user,
+      which already has passwordless sudo and is equally usable.
+      You must ALSO add this name to the "users" list in the Tailscale ACL ssh block,
+      or Tailscale SSH will refuse the target user. See README 2.1.
+    AllowedPattern: '^$|^[a-z_][a-z0-9_-]{0,31}$'
+
+  AdminSshPublicKey:
+    Type: String
+    Default: ''
+    Description: >
+      Optional OpenSSH public key for AdminUsername (e.g. 'ssh-ed25519 AAAA... me@lab').
+      A PUBLIC key is not a secret, so unlike every other credential here it is safe
+      as a CFN parameter. Only useful if Tailscale SSH is not the path you want; the
+      security group has zero inbound rules either way, so this is still tailnet-only.
+
   NetdataStreamKeyParam:
     Type: String
     Default: /monitoring/netdata-stream-key
@@ -122,6 +145,7 @@ Parameters:
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
   UsePublicIpv4: !Equals [!Ref AssignPublicIpv4, 'true']
+  HasAdminUser: !Not [!Equals [!Ref AdminUsername, '']]
 
 Resources:
 
@@ -503,6 +527,57 @@ Resources:
           test -n "$BIND_IP"
           echo "tailnet address: $BIND_IP"
 
+          # ---- optional named local admin
+          #
+          # Deliberately PASSWORDLESS. 'tailscale up --ssh' above means SSH to this
+          # node is authenticated by tailnet identity: the ACL decides who may
+          # connect and as which local user, and no password or key is involved.
+          # Adding a password here would not add security, it would subtract it --
+          # it creates a guessable credential where there was none, and it would be
+          # the only credential on the box not held in SSM.
+          #
+          # Consequence worth understanding: because the password is LOCKED, group
+          # membership in 'sudo' alone leaves sudo UNUSABLE -- it would prompt for a
+          # password that can never be satisfied, and you would be locked out of root
+          # on a box whose whole point is that you can get in. Hence the explicit
+          # NOPASSWD sudoers drop-in. This is the same shape as the AMI's own
+          # /etc/sudoers.d/90-cloud-init-users for the 'ubuntu' user, so it is not a
+          # weakening relative to what AWS already ships.
+          stage adminuser
+          if [ -n "${AdminUsername}" ]; then
+            if id -u "${AdminUsername}" >/dev/null 2>&1; then
+              echo "user ${AdminUsername} already exists, adjusting"
+            else
+              useradd -m -s /bin/bash "${AdminUsername}"
+            fi
+            # docker group is root-equivalent, but so is the NOPASSWD sudo below --
+            # it grants no privilege the account does not already have, it only saves
+            # typing sudo in front of every docker command.
+            usermod -aG sudo,docker,adm,systemd-journal "${AdminUsername}"
+            passwd -l "${AdminUsername}"
+            # visudo -cf before installing: a malformed sudoers file breaks sudo for
+            # EVERYONE, including the recovery path. Write to a temp name, validate,
+            # then move it into place.
+            printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${AdminUsername}" > /tmp/sudoer.new
+            visudo -cf /tmp/sudoer.new
+            install -m 0440 -o root -g root /tmp/sudoer.new "/etc/sudoers.d/90-${AdminUsername}"
+            rm -f /tmp/sudoer.new
+            # A public key is not a secret, so no xtrace guard. This is a fallback
+            # path only: with zero inbound SG rules it is still reachable exclusively
+            # over the tailnet, so it buys redundancy against Tailscale SSH being
+            # disabled in the ACL, not against Tailscale being down.
+            if [ -n "${AdminSshPublicKey}" ]; then
+              HOMEDIR=$(getent passwd "${AdminUsername}" | cut -d: -f6)
+              install -d -m 0700 -o "${AdminUsername}" -g "${AdminUsername}" "$HOMEDIR/.ssh"
+              echo "${AdminSshPublicKey}" > "$HOMEDIR/.ssh/authorized_keys"
+              chmod 0600 "$HOMEDIR/.ssh/authorized_keys"
+              chown "${AdminUsername}:${AdminUsername}" "$HOMEDIR/.ssh/authorized_keys"
+            fi
+            echo "admin user ${AdminUsername} ready (password locked, NOPASSWD sudo)"
+          else
+            echo "no AdminUsername set; use the AMI's 'ubuntu' account"
+          fi
+
           # ---- Netdata (host install, acts as the streaming parent)
           stage netdata
           curl -fsSL https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh
@@ -821,8 +896,20 @@ Outputs:
     Description: Retrieve the generated Grafana admin password.
     Value: !Sub 'aws ssm get-parameter --name ${GrafanaPasswordParam} --with-decryption --query Parameter.Value --output text'
 
+  AdminSshCommand:
+    Description: >
+      Interactive shell over Tailscale SSH -- no key, no password, tailnet identity
+      only. Falls back to 'ubuntu' when AdminUsername was left blank; that account
+      ships with the AMI and already has passwordless sudo.
+    Value: !Sub
+      - 'ssh ${User}@${TailscaleHostname}'
+      - User: !If [HasAdminUser, !Ref AdminUsername, 'ubuntu']
+
   BreakGlassAccess:
-    Description: Use if Tailscale fails to come up. Requires the SSM plugin locally.
+    Description: >
+      Use if Tailscale fails to come up -- this is the ONLY path that does not
+      depend on the tailnet, since the security group has no inbound rules at all.
+      Requires the session-manager-plugin installed locally.
     Value: !Sub 'aws ssm start-session --target ${MonitorInstance}'
 
   BootstrapLog:
