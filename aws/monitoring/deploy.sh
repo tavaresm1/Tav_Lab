@@ -61,17 +61,45 @@ export AWS_PAGER=""
 die() { echo "error: $*" >&2; exit 1; }
 have_param() { $AWS ssm get-parameter --name "$1" >/dev/null 2>&1; }
 
-# Git for Windows ships no uuidgen, so fall back through whatever is present.
-# tr -d '\r' matters: powershell emits CRLF and a stray CR would corrupt the key.
+# Emit one lowercase UUID, or die. Tries several sources and VALIDATES the
+# result of each, rather than probing for a binary and trusting it.
+#
+# Probing is not sufficient, and both failure modes have actually bitten:
+#   - Windows: the Microsoft Store puts `python`/`python3` App Execution Alias
+#     stubs on PATH. They satisfy `command -v`, then print "Python was not
+#     found" and exit non-zero. Output: empty.
+#   - Ubuntu: no `python` binary at all since 20.04, only `python3`.
+# Either way an EMPTY string reaches `ssm put-parameter`. AWS happens to reject
+# it on a length validator, but that is luck, not a safety net -- an empty
+# Netdata streaming key would silently accept every child on the tailnet.
+#
+# The kernel source goes first: present on every Linux, needs no interpreter,
+# and cannot half-work. The trailing tr strips the CR that powershell emits;
+# a stray CR inside a key corrupts it in ways that are miserable to debug.
 gen_uuid() {
-  if   command -v uuidgen  >/dev/null 2>&1; then uuidgen
-  elif command -v python   >/dev/null 2>&1; then python  -c "import uuid;print(uuid.uuid4())"
-  elif command -v python3  >/dev/null 2>&1; then python3 -c "import uuid;print(uuid.uuid4())"
-  elif command -v powershell >/dev/null 2>&1; then
-    powershell -NoProfile -Command "[guid]::NewGuid().ToString()"
-  else
-    die "no way to generate a UUID (need uuidgen, python, or powershell)"
-  fi
+  local src u
+  for src in kernel uuidgen python3 python powershell; do
+    u=""
+    case "$src" in
+      kernel)  [ -r /proc/sys/kernel/random/uuid ] \
+                 && u=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) ;;
+      uuidgen) u=$(uuidgen 2>/dev/null) ;;
+      python3) u=$(python3 -c "import uuid;print(uuid.uuid4())" 2>/dev/null) ;;
+      python)  u=$(python  -c "import uuid;print(uuid.uuid4())" 2>/dev/null) ;;
+      powershell) u=$(powershell -NoProfile -Command \
+                      "[guid]::NewGuid().ToString()" 2>/dev/null) ;;
+    esac
+    u=$(printf '%s' "$u" | tr -d '\r\n ' | tr 'A-Z' 'a-z')
+    # 8-4-4-4-12 hex. Deliberately a glob, not a regex: no grep dependency.
+    case "$u" in
+      ????????-????-????-????-????????????)
+        case "$u" in
+          *[^0-9a-f-]*) ;;
+          *) printf '%s\n' "$u"; return 0 ;;
+        esac ;;
+    esac
+  done
+  die "no working UUID source (tried /proc, uuidgen, python3, python, powershell)"
 }
 
 cmd_preflight() {

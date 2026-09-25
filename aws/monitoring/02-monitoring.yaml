@@ -692,9 +692,29 @@ Resources:
     Condition: HasAlertEmail
     Properties:
       DisplayName: !Sub '${AWS::StackName}-alerts'
-      Subscription:
-        - Protocol: email
-          Endpoint: !Ref AlertEmail
+
+  # The subscription MUST be its own resource, not an inline 'Subscription:'
+  # property on the topic above. CloudFormation treats the inline form as
+  # write-once: it creates the subscription with the topic and then never
+  # reconciles it again. So if the subscription disappears -- and it disappears
+  # very easily, because every SNS notification email carries an unsubscribe
+  # link in its footer -- CFN will not notice and will not recreate it. The
+  # stack stays CREATE_COMPLETE while alerting is silently dead, which is the
+  # exact failure this self-watch exists to prevent.
+  #
+  # As a standalone resource it is a real managed resource: drift is detectable,
+  # and a stack update recreates it if it was removed out of band.
+  #
+  # This bit us on 2026-09-25: the topic existed, both alarms were OK, and the
+  # topic had zero subscriptions. An earlier auto-recovery email had been
+  # delivered, so the subscription had existed and been confirmed at some point.
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
 
   # TreatMissingData MUST be 'missing' on both of these, not 'breaching'.
   #

@@ -53,10 +53,11 @@ bad()  { FAIL=$((FAIL+1)); printf '  %sFAIL%s  %s\n' "$R" "$Z" "$1"; }
 note() { printf '        %s\n' "$1"; }
 head_() { printf '\n%s== %s%s\n' "$B" "$1" "$Z"; }
 
-# --noproxy '*' is not optional on a corporate-managed machine. With http_proxy
-# set in the environment, curl sends tailnet requests to the company proxy, which
-# has no route to 100.64/10 and answers 502 -- which looks exactly like a broken
-# service. Tailnet traffic must never traverse a proxy.
+# --noproxy '*' costs nothing on the Linux Mint box (no proxy set) but is not
+# optional if this is ever run from the MathWorks-managed laptop: with http_proxy
+# in the environment, curl sends tailnet requests to the company proxy, which has
+# no route to 100.64/10 and answers 502 -- indistinguishable from a dead service.
+# Tailnet traffic must never traverse a proxy. Keep this even if it looks inert.
 CURL=(curl --noproxy '*' --max-time "$TIMEOUT")
 
 # http() is almost always called as $(http ...), i.e. in a subshell, so it cannot
@@ -111,9 +112,10 @@ if command -v tailscale >/dev/null 2>&1; then
 else
   warn "tailscale not on PATH here"
   note "this machine is not on the tailnet, so every service check below will fail"
-  note "regardless of the node's actual health. Run this script somewhere that IS:"
-  note "  ssh root@192.168.1.226 'MON_HOST=mon-aws bash -s' < healthcheck.sh"
-  note "or on the node itself with MON_HOST=localhost."
+  note "regardless of the node's actual health. Run it from a tailnet member --"
+  note "the Linux Mint workstation, or tav-serv -- or pipe it to one:"
+  note "  ssh root@tav-serv 'MON_HOST=mon-aws CHILDREN=tav-serv bash -s' < healthcheck.sh"
+  note "or on the node itself: ssh root@mon-aws 'MON_HOST=localhost bash -s' < healthcheck.sh"
 fi
 
 if [ -n "${http_proxy:-}${HTTP_PROXY:-}${all_proxy:-}" ]; then
@@ -121,8 +123,11 @@ if [ -n "${http_proxy:-}${HTTP_PROXY:-}${all_proxy:-}" ]; then
 fi
 
 if [ "$MON_HOST" != "localhost" ] && [ "$MON_HOST" != "127.0.0.1" ]; then
-  if ping -n 1 -w 3000 "$MON_HOST" >/dev/null 2>&1 \
-     || ping -c 1 -W 3 "$MON_HOST" >/dev/null 2>&1; then
+  # Linux flags first (this runs on Linux Mint / Debian in practice); the
+  # Windows form is the fallback for a Git-Bash run on the work laptop, where
+  # -c/-W are unrecognised and -n/-w mean count/timeout instead.
+  if ping -c 1 -W 3 "$MON_HOST" >/dev/null 2>&1 \
+     || ping -n 1 -w 3000 "$MON_HOST" >/dev/null 2>&1; then
     ok "$MON_HOST resolves and answers ping"
   else
     warn "$MON_HOST did not answer ping"
@@ -311,9 +316,21 @@ if [ -n "$ND_INFO" ]; then
           ok "expected child '$want' is streaming"
         else
           bad "expected child '$want' is NOT in the parent's node list"
-          note "on $want: check /etc/netdata/stream.conf 'destination' and 'api key'"
-          note "the api key must equal: aws ssm get-parameter --name $ND_KEY_PARAM \\"
-          note "  --with-decryption --query Parameter.Value --output text"
+          note "Most likely cause is an api key the PARENT does not accept. The child's"
+          note "key must match a [section] header in the parent's stream.conf -- the"
+          note "value in SSM is NOT authoritative, because the parent's config was"
+          note "written once at bootstrap and does not follow later SSM changes:"
+          note "  ssh root@$MON_HOST 'grep \"^\\[\" /etc/netdata/stream.conf'"
+          note "  aws ssm get-parameter --name $ND_KEY_PARAM \\"
+          note "    --with-decryption --query Parameter.Value --output text"
+          note "Then on $want -- note the config dir differs for a STATIC netdata"
+          note "install (any distro the kickstart cannot identify, e.g. Linux Mint):"
+          note "  CONF=/etc/netdata; [ -d /opt/netdata/etc/netdata ] && CONF=/opt/netdata/etc/netdata"
+          note "  grep -E 'destination|api key' \$CONF/stream.conf"
+          note "  journalctl -u netdata | grep -i stream | tail"
+          note "A rejected key logs 'is not permitted' or 'denied access' on BOTH ends."
+          note "Also check the name: a child registers its own hostname, so '$want'"
+          note "must be what that host calls itself, not what you call it."
         fi
       done
     else
