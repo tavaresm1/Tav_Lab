@@ -296,8 +296,14 @@ Resources:
               local total
               total=$(wc -c < "$BOOTLOG" 2>/dev/null | tr -d ' ' || echo 0)
               if [ "$total" -gt "$SHIPPED" ]; then
+                # Defence in depth. Secret-handling runs with xtrace off, but a
+                # future edit will forget, and this log gets shipped to CloudWatch
+                # and pasted into diag files that end up in git.
                 tail -c "+$((SHIPPED + 1))" "$BOOTLOG" 2>/dev/null \
-                  | tail -c 200000 > /tmp/chunk.txt || true
+                  | tail -c 200000 \
+                  | sed -E -e 's/tskey-[A-Za-z0-9_-]+/tskey-REDACTED/g' \
+                           -e 's/(authkey|api[-_ ]?key|password|PASSWORD)([ =:"]+)[^ "]+/\1\2REDACTED/g' \
+                  > /tmp/chunk.txt || true
                 SHIPPED="$total"
                 if [ -s /tmp/chunk.txt ]; then
                   python3 -c "import json,time;print(json.dumps([{'timestamp':int(time.time()*1000),'message':open('/tmp/chunk.txt',errors='replace').read()}]))" \
@@ -376,10 +382,17 @@ Resources:
             done
             return 1
           }
+          # xtrace is on for diagnostics, and it expands variables -- so anything
+          # touching a secret must run with it OFF, or the plaintext lands in the
+          # bootstrap log, then CloudWatch, then a diag file, then possibly a git
+          # commit. Learned the hard way: an auth key leaked exactly that route.
+          { set +x; } 2>/dev/null
           TSKEY=$(get_param "${TailscaleAuthKeyParam}")
           NDKEY=$(get_param "${NetdataStreamKeyParam}")
+          set -x
           test -n "$TSKEY"
           test -n "$NDKEY"
+          echo "fetched both secrets from SSM ok (values suppressed)"
 
           # ---- find, format and mount the data volume
           # /dev/sdf shows up as an nvme namespace on Nitro, so identify it as
@@ -474,7 +487,13 @@ Resources:
           stage tailscale_up
           TS_ARGS=""
           if [ -n "${TailscaleTag}" ]; then TS_ARGS="--advertise-tags=${TailscaleTag}"; fi
+          # Trace off: the expanded command line contains the auth key. The error
+          # message from tailscale itself is still captured, which is the part that
+          # actually matters -- a bad key reports 'invalid key: API key ... not valid'.
+          { set +x; } 2>/dev/null
+          echo "+ tailscale up --authkey <redacted> --hostname ${TailscaleHostname} --ssh $TS_ARGS"
           tailscale up --authkey "$TSKEY" --hostname "${TailscaleHostname}" --ssh $TS_ARGS
+          set -x
           BIND_IP=""
           for i in $(seq 1 30); do
             BIND_IP=$(tailscale ip -4 2>/dev/null | head -1 || true)
@@ -502,6 +521,8 @@ Resources:
           # CGNAT addresses. Netdata stays bound to all interfaces because it can
           # start before tailscale0 exists on boot; the empty security group and
           # this allow-list are the actual controls.
+          # Trace off: the section header is the streaming key.
+          { set +x; } 2>/dev/null
           cat > /etc/netdata/stream.conf <<STREAMCONF
           [$NDKEY]
               enabled = yes
@@ -509,6 +530,8 @@ Resources:
               health enabled by default = auto
               allow from = 100.64.0.0/10 127.0.0.1
           STREAMCONF
+          set -x
+          echo "wrote /etc/netdata/stream.conf (api key suppressed)"
           chown netdata:netdata /etc/netdata/stream.conf
           chmod 640 /etc/netdata/stream.conf
 
@@ -525,10 +548,14 @@ Resources:
           stage grafana_pw
           # hex, not base64-piped-through-tr: a pipeline here can SIGPIPE and
           # abort the script under 'set -o pipefail'.
+          # Trace off: this is a credential from the moment it exists.
+          { set +x; } 2>/dev/null
           GFPASS=$(openssl rand -hex 16)
           aws ssm put-parameter --name "${GrafanaPasswordParam}" --type SecureString \
             --value "$GFPASS" --overwrite >/dev/null
           printf '%s\n' "$GFPASS" > /root/.grafana_admin_password
+          set -x
+          echo "generated Grafana admin password and stored it in SSM (value suppressed)"
           chmod 600 /root/.grafana_admin_password
 
           # ---- the container stack

@@ -1,0 +1,6 @@
+# deploy.sh writes diagnostics here, and they contain the raw bootstrap log.
+# That log has historically included expanded secrets from 'set -x' output, so
+# these must never be committed. An auth key and the netdata streaming key were
+# leaked to this repo exactly this way on 2026-09-17.
+diag-*.txt
+error.txt

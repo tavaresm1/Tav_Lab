@@ -368,6 +368,42 @@ unconfirmed subscription silently delivers nothing.
 
 # Part 4 — Verify the node
 
+## 4.0 The one command that checks everything
+
+```bash
+CHILDREN="pve" ./healthcheck.sh
+```
+
+Read-only, safe to run any time. It walks four layers and prints PASS/WARN/FAIL with
+a non-zero exit if anything failed:
+
+1. **This workstation** — is Tailscale up, does `mon-aws` resolve.
+2. **AWS control plane** — stack status, instance running, both status-check alarms
+   present *and* `TreatMissingData=missing` (guards against the recovery-loop
+   regression), **SNS subscription confirmed**, SSM parameters present, no orphaned
+   volumes, bootstrap log shows `result=SUCCESS`.
+3. **Services** — Netdata :19999, Uptime Kuma :3001, ntfy :8080, Grafana :3000,
+   Loki :3100.
+4. **Telemetry actually flowing** — which children the parent is mirroring, whether
+   Loki has ever received a log line, and whether Netdata's health engine is on
+   (a parent with zero alarms defined will never notify anyone).
+
+`--no-aws` skips layer 2. `MON_HOST=localhost` to run it on the node itself.
+
+**Run it from somewhere on the tailnet.** The Windows workstation isn't currently a
+tailnet member, so every layer-3 check will fail there no matter how healthy the node
+is. From `pve`:
+
+```bash
+ssh root@192.168.1.226 'MON_HOST=mon-aws CHILDREN=pve bash -s' < healthcheck.sh
+```
+
+It forces `curl --noproxy '*'`, which matters on a corporate-managed machine: with
+`http_proxy` set, curl sends tailnet requests to the company proxy, which has no route
+to `100.64.0.0/10` and returns **502** — indistinguishable from a broken service.
+
+## 4.1 Manual checks
+
 Several commands below use `$INSTANCE`. In a fresh shell, set it first:
 
 ```bash
@@ -667,6 +703,8 @@ See [3.3](#33-deploy-the-monitoring-node) for how to read the stage markers.
 | `mon-aws` never appears in `tailscale status` | Bad/expired/already-used auth key, or `tag:monitor` not defined in ACLs. On the box: `tailscale status`, `journalctl -u tailscaled`. |
 | `tailscale up` fails with a tag error | The auth key wasn't created *with* `tag:monitor`. Generate a new tagged key, update SSM, rebuild the instance. |
 | `aws ssm start-session` fails | Missing plugin (step 1.2), or the instance has no outbound internet to reach SSM endpoints. |
+| "Netdata on pve only listens on 127.0.0.1, it's unreachable from outside" | **Not a fault — that is the design.** `install-child.sh` sets `bind to = 127.0.0.1` deliberately. A child never accepts connections; it opens an *outbound* stream to the parent and pushes metrics up it. Do not open 19999 on `pve` or poke a hole in the Proxmox firewall: it buys nothing and costs you a listening service. The correct test of a child is whether it appears in the **parent's** node list — `./healthcheck.sh` does exactly that. |
+| Every service check fails with HTTP 502 | Your shell has `http_proxy`/`HTTPS_PROXY` set and curl is routing tailnet requests through the corporate proxy, which can't reach `100.64.0.0/10`. `healthcheck.sh` already passes `--noproxy '*'`; if testing by hand, do the same. |
 | Home node not in Netdata's node list | Key mismatch. Compare `/etc/netdata/stream.conf` on the child against SSM. Then `journalctl -u netdata -n 100` on both ends. |
 | Netdata child connects then drops | Parent's `allow from` doesn't cover the source. Children arrive from `100.64.0.0/10`; confirm the child connects over the tailnet, not a public path. |
 | Loki query returns nothing | Alloy. `journalctl -u alloy -n 50` on the child. Usually the `systemd-journal` group membership didn't take — needs a service restart. |
