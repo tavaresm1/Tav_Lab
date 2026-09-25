@@ -751,6 +751,58 @@ If you want PromQL and dashboards-as-code, add a real Prometheus that scrapes
 `http://<tailnet-ip>:19999/api/v1/allmetrics?format=prometheus` and point Grafana at
 that instead.
 
+## 8.1 The log dashboard
+
+`dashboards/journal-logs.json` — import via **Dashboards → New → Import → Upload JSON**.
+It is a **logs** dashboard, because Loki is the only datasource; see the caveat above
+for why there is nothing metric-shaped to plot.
+
+It has no hardcoded datasource UID. The datasource is a dashboard variable, so import
+prompts you to pick Loki rather than silently binding to a UID that differs between
+rebuilds — the provisioned one is currently `P8E80F9AEF21F6940`, which is derived, not
+stable, and hardcoding it is the single most common reason an imported dashboard shows
+"datasource not found" after a redeploy.
+
+Variables: **Datasource**, **Host** (multi), **Unit** (multi), **Search** (free text,
+substituted into a LogQL line filter). Panels: line/error/warning counts, hosts
+shipping, lines/sec by host and by priority, top 15 noisiest units, errors/sec by unit,
+then the two log streams.
+
+**Verify the labels exist before trusting the numbers.** Every panel depends on the
+four labels that `home-node/config.alloy` promotes, and a stat panel reading `0`
+because a label is *absent* looks identical to one reading `0` because all is well:
+
+```bash
+for l in job host unit level; do
+  printf '%-6s ' "$l"
+  curl -s --noproxy '*' "http://mon-aws:3100/loki/api/v1/label/$l/values" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("data") or "NO VALUES")'
+done
+```
+
+Expect `job` = `systemd-journal`, `host` = your children, `unit` = a long list, and
+`level` = journal priority keywords (`err`, `warning`, `info`, ...). `level` is the one
+to watch: it comes from `__journal_priority_keyword`, a field Alloy derives from the
+numeric `PRIORITY` rather than one the journal ships, so it is the most likely of the
+four to be empty if the Alloy version changes.
+
+Two panels are worth understanding rather than just reading:
+
+- **Hosts shipping logs** goes red below 2. Netdata streaming and Alloy log shipping are
+  **independent paths over the same tailnet** — a child can be perfectly healthy in
+  `mirrored_hosts` while its Alloy has been dead for a week. `healthcheck.sh` only
+  asserts that Loki has *a* `job` label, which one working shipper satisfies. This panel
+  is the thing that notices the second one stopping.
+- **Top 15 noisiest units** is a capacity panel, not a curiosity. Each distinct
+  `{host, unit, level}` combination is its own Loki stream, and stream count is what
+  Loki's cost and memory scale with — not bytes. `config.alloy` deliberately promotes
+  only three fields for this reason.
+
+Not provisioned into Grafana on purpose: adding it to the template's provisioning
+directory would mean a `UserData` change, which replaces the instance. Import it by
+hand, or copy it to `/opt/monitoring/provisioning/dashboards/` on the running node and
+restart the Grafana container.
+
 ---
 
 # Part 9 — Day-2 operations
