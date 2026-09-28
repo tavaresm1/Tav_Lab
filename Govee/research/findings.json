@@ -1,0 +1,300 @@
+{
+  "question": "Which Home Assistant integration, HACS custom component, or add-on gives the BEST DEVICE COVERAGE for Govee products as of late 2026?\n\nUser's situation and constraints (weave these throughout):\n- Current setup is unknown/mixed — they aren't sure whether they have the official \"Govee Light Local\" built-in integration, an older cloud-based HACS \"Govee\" custom component, or both. So the research should include how to identify what's installed and a recommended migration path from each starting point.\n- Devices that MUST be supported: Govee RGB light strips and bulbs; Govee TV/ambient backlight kits (Envisual / DreamView camera-based, e.g. T1/T2, H605x series); and Govee OUTDOOR lights (e.g. Permanent Outdoor Lights Pro/Lite H705x, outdoor string/flood lights, Neon rope lights). Outdoor + TV backlight coverage is a key differentiator — many integrations only handle simple bulbs/strips.\n- Top priority: MAXIMUM DEVICE COVERAGE — one solution that exposes every Govee product they own, including segment/zone control, scenes, DIY modes, and music/video modes where possible.\n- Acceptable complexity: HACS custom integrations are fine (third-party repos OK), but they'd prefer to keep things inside Home Assistant. Add-on/Docker-based options (e.g. Govee2MQTT requiring an MQTT broker) should be covered and compared, but flag the extra infrastructure cost honestly.\n\nSpecific things to research and compare:\n1. The current landscape of Govee<->Home Assistant options: official core \"Govee Light Local\" (LAN API), Govee2MQTT (wez/govee2mqtt), the HACS \"Govee\" / \"Govee Lights\" cloud integrations (LaggAt/Galorhallen and successors), BLE-based options, and any newer 2025-2026 projects. Which are actively maintained vs abandoned/archived in 2026?\n2. Which Govee models each option actually supports — specifically whether TV backlight kits, outdoor permanent lights, and segmented devices work, and whether scenes/DIY/snapshot modes are exposed as entities.\n3. Govee's Developer API v2 (openapi.api.govee.com) — how to get a key, what device types it covers, rate limits (daily request caps, per-device limits), and how those limits affect polling/responsiveness in HA.\n4. The Govee LAN API — which models actually have the \"LAN Control\" toggle, current firmware situation, and whether Govee has been expanding or shrinking LAN support.\n5. Known pain points and gotchas: rate-limit errors, state desync, entities going unavailable, brightness/color rounding, multi-segment control, whether Matter/Thread-enabled Govee devices bypass all of this, and whether the Govee Matter rollout changes the recommendation.\n6. Concrete recommendation with setup steps: best single-integration choice for max coverage, plus the best \"stacked\" combination (e.g. LAN for latency + cloud for coverage) and how to avoid duplicate entities when running more than one.\n7. Community consensus from r/homeassistant, r/Govee, HA community forum threads, and GitHub issue trackers in 2025-2026.",
+  "command": "submit",
+  "findings": [
+    {
+      "claim": "The classic HACS cloud integration LaggAt/hacs-govee is maintainer-declared discontinued and functionally abandoned — do not start (or stay) here.",
+      "confidence": "high",
+      "vote": "3-0 (merged from three unanimous claims)",
+      "sources": [
+        "https://github.com/LaggAt/hacs-govee",
+        "https://raw.githubusercontent.com/LaggAt/hacs-govee/master/README.md",
+        "https://pypi.org/project/govee-api-laggat/"
+      ],
+      "evidence": "The README's second section is literally titled \"Discontinuation - who wants to continue?\" and says \"I will probably only allow pull reqests which fix breaking changes... If you want to take over this repository feel free to contact me.\" Last release is tag 2025.7.1 (\"2025.7 Compatibility release\", 27 Jul 2025), last master commit 27 Jul 2025 (~14 months stale), with 158 open issues and 25 open PRs (GitHub search API total_count 158, incomplete_results=false). The only substantive 2025 code change was an external contributor's HA-compat fix (async_forward_entry_setups). Open 2026 issues document unfixed breakage against current HA: #278 \"color_mode property missing — HomeAssistantError on every poll\", #284 (H6009), #285 (H6051). Critically it is NOT GitHub-archived (page state payload shows isArchived:false), so HACS shows no warning and users may not realize it is dead. Feature-wise it is a dead end regardless: manifest is cloud_polling pinned to govee-api-laggat==0.2.2 (last PyPI upload 2022-04-05) which hardcodes the LEGACY developer-api.govee.com endpoint; the only platform file is light.py; a repo-wide grep for effect|scene|segment|diy|snapshot|music|openapi returns exactly one unrelated hit (a test's side_effect=). README caveats confirm control is limited to \"on/off, brightness, color temperature and color\". No device-compatibility table exists."
+    },
+    {
+      "claim": "Home Assistant's built-in \"Govee Lights Local\" (govee_light_local) is a genuinely local, zero-cloud-quota integration, but it is architecturally incapable of the user's must-haves: it exposes one light entity per device, no segment/zone entities, and only 11 hardcoded generic scene effects rather than the user's Govee-app scene library.",
+      "confidence": "high",
+      "vote": "3-0 (merged from five unanimous claims)",
+      "sources": [
+        "https://www.home-assistant.io/integrations/govee_light_local/",
+        "https://raw.githubusercontent.com/home-assistant/home-assistant.io/current/source/_integrations/govee_light_local.markdown",
+        "https://github.com/Galorhallen/govee-local-api/blob/develop/SUPPORTED_DEVICES.md",
+        "https://github.com/home-assistant/core/tree/dev/homeassistant/components/govee_light_local",
+        "https://github.com/wez/govee2mqtt/blob/main/docs/SKUS.md"
+      ],
+      "evidence": "Docs: \"Integrates Govee lights into Home Assistant using Local API control... Its IoT class is Local Push.\" Code confirms no cloud path exists at all: manifest is iot_class local_push, requirements [govee-local-api==3.1.0], dependencies [network]; config_flow.py is a bare register_discovery_flow UDP multicast flow with zero credential fields; govee-local-api 3.1.0 from PyPI has NO runtime HTTP client dependency (no aiohttp/requests/httpx), so no openapi.api.govee.com rate limit can apply. Frontmatter declares ha_category: [light] and ha_platforms: [light]; __init__.py has PLATFORMS = [Platform.LIGHT]; the component directory contains no select.py/switch.py/number.py. A case-insensitive grep of the whole 2202-byte docs page for segment|zone|diy|music|video|snapshot|effect returns zero hits outside the single note \"Some scenes may not be supported from all devices... please open an issue at the underling library\". Scenes are surfaced only as light effect strings: light.py sets _attr_effect_list = [_NONE_SCENE, *capabilities.scenes.keys()], and SCENE_CODES in light_capabilities.py is ONE module-level dict of exactly 11 entries (sunrise, sunset, movie, dating, romantic, twinkle, candlelight, snowflake, energetic, breathe, crossing) handed to every scene-capable model — i.e. a fixed 12-option effect list, never the app's DIY/music/video modes (repo-wide grep for diy|music|video|camera|dreamview|mic = zero real hits; controller.py set_scene() has no arbitrary-code escape hatch). Coverage: the library knows 272 models (verified: grep -c '^| H' = 272, and 272 keys in GOVEE_LIGHT_CAPABILITIES); unlisted models are still discovered but fall back to ON_OFF_CAPABILITIES (controller.py ~932-940 logs \"Device %s is not supported. Only power control is available\"), producing a pure ColorMode.ONOFF entity. Open 2026 issues show this is the top failure mode (H60B2, H60B0, H61D4 \"only ON/OFF available, no effects/scenes\", H61F6 Strip Light 2 Pro). Two further hard gates: LAN control is lights-only (\"All known LAN API compatible devices are lights; there are no known applicance devices that support fully local control\") and must be toggled on per-device in the Govee Home app (docs' sole prerequisite links app-h5.govee.com/user-manual/wlan-guide), so a model appearing in the list is not sufficient — see govee-local-api issues #172 (H7021) and #179 (H6008), both listed-but-undiscovered."
+    },
+    {
+      "claim": "Outdoor H70xx products (including Permanent Outdoor Lights) are well represented in the LAN library's model table, but per-segment capability is declared for only ~26% of them — and it is moot in Home Assistant because core's govee_light_local ships no segment handling at all.",
+      "confidence": "high",
+      "vote": "3-0",
+      "sources": [
+        "https://github.com/Galorhallen/govee-local-api/blob/develop/SUPPORTED_DEVICES.md",
+        "https://github.com/Galorhallen/govee-local-api/blob/develop/src/govee_local_api/light_capabilities.py",
+        "https://github.com/home-assistant/core/blob/dev/homeassistant/components/govee_light_local/light.py"
+      ],
+      "evidence": "Verified verbatim in the auto-generated table (columns Model | RGB | Color Temperature | Temperature Range (K) | Brightness | Segments | Scenes): \"| H7052 | ✅ | ✅ | 2000-9000 | ✅ | 15 | ✅ |\"; H705D=9, H705E=15, H705F=15, H70C4/H70C5/H70C7/H70D1/H70D2=10, H70B5=3; while H7050, H7051, H7053, H7055-H7058, H705A-H705C all show '-' in Segments (H7054 is absent entirely). Of 78 H70xx rows, exactly 20 carry a numeric Segments value (~26%). Three material qualifications: (1) grep for 'segment' in core's govee_light_local/light.py returns nothing — only scenes are surfaced — so a 'Segments: 15' cell buys the user nothing today; (2) the 15 values are a library artifact, not the device: light_capabilities.py declares H705E with 18 and H705F with 27 segments but segments_codes = SEGMENT_CODES[:segments] truncates against a 15-entry SEGMENT_CODES list (same in shipped tag v3.1.0 that HA pins), so the table understates the Outdoor Lights Pro/Lite models; (3) SUPPORTED_DEVICES.md exists only on the develop branch (404 on main) and the count is a moving target — HA core 3.1.0 ships 271 models, develop has 272."
+    },
+    {
+      "claim": "Govee's cloud Platform API at openapi.api.govee.com (paths /router/api/v1/...) is the only transport that exposes the capability taxonomy needed for the user's advanced features — per-segment color/brightness, dynamic (non-static) scene lists including DIY and snapshot, and music mode.",
+      "confidence": "high",
+      "vote": "3-0",
+      "sources": [
+        "https://developer.govee.com/reference/get-you-devices",
+        "https://github.com/wez/govee2mqtt/blob/main/src/platform_api.rs"
+      ],
+      "evidence": "Govee's own reference table lists: \"devices.capabilities.segment_color_setting | segmentedBrightness, segmentedColorRgb | set color or brightness on segment\", \"devices.capabilities.dynamic_scene | lightScene, diyScene, snapshot | set scene,but the options are not static\", \"devices.capabilities.music_setting | musicMode | set music mode\". These are not theoretical: govee2mqtt's platform_api.rs encodes the identical strings as DeviceCapabilityKind variants and consumes them functionally — supports_segmented_rgb() derives segment count from the segmentedColorRgb 'segment' array parameter, supports_segmented_brightness() reads (min,max) from the brightness Integer param, set_segment_rgb/set_segment_brightness error when the capability is absent, list_scene_names() enumerates musicMode struct options into 'Music: {name}' entries and set_scene_by_name sends {musicMode, sensitivity:100, autoColor:1}. Important nuances: only segments become discrete HA light entities ('Segment 00X'); scenes/DIY/music appear as effect options on the parent light, not standalone entities. The taxonomy is returned per-device, so its existence does NOT by itself prove any given H605x TV kit or H705x outdoor light exposes it. Govee's own doc page is internally inconsistent (its H605C sample JSON puts diyScene under dynamic_setting, not dynamic_scene) and govee2mqtt defensively treats DynamicSetting/DynamicScene/Mode as scene-bearing while pulling DIY scenes from a dedicated /router/api/v1/device/diy-scenes endpoint."
+    },
+    {
+      "claim": "The Platform API's documented rate limits are per-minute/per-second, not a daily quota: 30 req/min/account for device listing, 30 req/min/device for state, 12 req/sec/account (burst 80) and 2 req/sec/device (burst 6) for control — so ~2 s is the fastest sustainable per-device poll and rapid slider/segment writes must be throttled. The 10,000/day cap people cite belongs to the LEGACY developer-api.govee.com API.",
+      "confidence": "high",
+      "vote": "2-1 (dissent was on nomenclature, not the numbers)",
+      "sources": [
+        "https://developer.govee.com/reference/get-you-devices",
+        "https://developer.govee.com/reference/get-devices-status",
+        "https://developer.govee.com/reference/control-you-devices.md",
+        "https://govee-public.s3.amazonaws.com/developer-docs/GoveeDeveloperAPIReference.pdf",
+        "https://developer.govee.com/llms.txt"
+      ],
+      "evidence": "The identical table appears on three separate Govee developer-portal pages (control-you-devices.md frontmatter updatedAt 2025-11-12, so current): /router/api/v1/user/devices = Account/Minute/30/30; /router/api/v1/device/control = Account/Second/12/burst 80 (720 req/min/account) AND Device/Second/2/burst 6 (120 req/min/device); /router/api/v1/device/state = Device/Minute/30/30; /router/api/v1/device/scenes = Device/Minute/30/30. Preceded by \"if the request response 429, means request limits happens\". No daily quota appears on any of these pages, nor on getting-started, nor on the apply-key page, and llms.txt (the full docs index) contains no rate-limit page that could hold one. By contrast Govee's legacy API reference PDF does state \"total requests from one user can not be more than 10000 per day\" plus 10/min/device and 100/day for appliances. Naming trap to avoid in any write-up: govee2mqtt's source header warns that openapi.api.govee.com is the \"Govee Platform API V1\" and is NOT the same as the older, confusingly higher-numbered \"Govee HTTP API v2\". Say 'openapi.api.govee.com Platform API' or the no-daily-quota statement becomes wrong. No X-RateLimit-* headers are documented for the new API, so integrations must budget blind."
+    },
+    {
+      "claim": "wez/govee2mqtt is the mature, actively maintained maximum-coverage option (cloud Platform API + undocumented IoT MQTT + LAN, giving segments, DIY scenes and music modes), but it is WiFi-only with zero BLE support and carries real infrastructure cost: a Docker/add-on process plus an MQTT broker.",
+      "confidence": "high",
+      "vote": "2-1 on the BLE claim (verified high); maintenance and capability evidence unanimous",
+      "sources": [
+        "https://github.com/wez/govee2mqtt/blob/main/docs/SKUS.md",
+        "https://github.com/wez/govee2mqtt/blob/main/docs/LAN.md",
+        "https://github.com/wez/govee2mqtt/blob/main/src/service/device.rs",
+        "https://github.com/wez/govee2mqtt/issues/560",
+        "https://github.com/wez/govee2mqtt/issues/99",
+        "https://github.com/wez/govee2mqtt/issues/220"
+      ],
+      "evidence": "SKUS.md lines 7-8, verbatim: \"If the device has no WiFi, then Govee2MQTT is not able to control it at this time, as there is no BLE support in Govee2MQTT at this time.\" The whole compatibility table is organized around WiFi controller chips (LAN API / Platform API / undocumented IoT) with no BLE column. The exclusion is by design in code: src/service/device.rs:577 `pub fn is_ble_only_device(&self) -> Option<bool>` reads quirk.ble_only, and BLE-only devices still enumerate as non-functional MQTT entities (clutter, not silence — issue #99, H6127 strip, open since Jan 2024, labelled ble-only + needs:funding). Issue #560 \"BLE Proxy Support Proposal\" (Dec 2025, still open, zero maintainer replies) states \"BLE-only devices are dead in the water\". Four BLE PRs exist (#716, #690, #648 open; #241 closed draft), none merged. Repo is alive: latest main commits Apr 2026 (tag 2026.03.25-ab9deb66), ~1.5k stars, 304 open issues. Maintenance status of the project is good; per-SKU reliability is not perfect (#96 \"H7021 only showing 15 of 30 sements\", labelled responsible:govee — Govee's API under-reports segment count; #705 colour writes silently failing while in music mode). Importantly, the BLE gap does NOT hit the user's stated differentiators: TV/ambient kits (H605x, H66A0/H66A1 per issue #685) and H705x Permanent Outdoor Lights are WiFi devices on the Platform API path. The real exposure is cheap Bluetooth-only strip/string SKUs (H6102, H6127, H7002 outdoor string) — which no cloud API option covers either, since they all ride WiFi transports; those need HA's built-in Govee BLE integration or an ESPHome BLE proxy instead."
+    },
+    {
+      "claim": "lasswellt/govee-homeassistant is the live 2026 HACS successor to LaggAt/hacs-govee and currently offers the broadest in-HA feature surface for exactly the user's differentiator hardware — TV backlights and sync boxes with scene/DIY selectors, a music-mode switch and a DreamView switch, plus RGBIC per-segment control with four segment modes and a govee.set_segment_color action.",
+      "confidence": "medium",
+      "vote": "3-0 on both underlying claims, but downgraded for project youth and self-reported coverage",
+      "sources": [
+        "https://github.com/lasswellt/govee-homeassistant",
+        "https://github.com/lasswellt/govee-homeassistant/blob/main/README.md",
+        "https://github.com/lasswellt/govee-homeassistant/blob/main/custom_components/govee/switch.py",
+        "https://github.com/lasswellt/govee-homeassistant/blob/main/custom_components/govee/const.py",
+        "https://github.com/lasswellt/govee-homeassistant/blob/main/custom_components/govee/services.yaml"
+      ],
+      "evidence": "Maintenance verified on 2026-09-28: repo created 2026-01-14, MIT, not archived, 129 stars / 42 forks / 1052 commits, release v2026.9.15 published that same day plus a push at 16:01Z; ten releases in September 2026 alone; commits on 24-28 Sep; outside human contributors (meeowgler, BrawnyBravo) and enforced CI (pytest 3.12/3.13, mypy, style, HACS + HA validation). README states the lineage: \"This integration began as LaggAt/hacs-govee by @LaggAt (Florian Lagg), first published in August 2020... The current codebase has been substantially rewritten (Govee API v2, MQTT push, LAN control, the non-light platforms)\" — i.e. it is the only option that stacks all four transports inside HA with no external broker. Features confirmed in code, not just docs: switch.py:141 creates GoveeDreamViewSwitchEntity when device.supports_dreamview; switch.py:594 GoveeMusicModeSwitchEntity with REST and legacy-BLE paths; select.py:141-145 builds DIY-scene selects (REST first, BLE passthrough fallback); const.py:436-444 define SEGMENT_MODE_DISABLED/GROUPED/INDIVIDUAL/BOTH, all four offered in config_flow.py:1011-1014; services.yaml defines set_segment_color(device_id, segments, rgb_color) plus refresh_scenes and send_raw_ptreal. Segment and scene state is optimistic by design (select.py:912 \"Return current selected scene from state (optimistic)\", switch.py:609 \"Uses optimistic state since API may not return music mode status\"). It also handles a 2026 Govee change (2FA in the setup/reconfigure flow) and covers non-light platforms (leak sensors, purifiers, fans). Why only medium: (a) 'supported' means implemented, not verified working — open Sept 2026 issues report per-SKU failures on these exact features: #213 H66A0 TV Backlight 3 Pro DreamView returns HTTP 200 but sync never starts (hence const.py:420 PTREAL_DREAMVIEW_SKUS workaround), #215 Music Mode not working, #220 H605B DreamView T1 Pro power-off not working, #208 H7026 segment indices 16-29 affect the whole string; (b) the README device table has NO outdoor/permanent-outdoor row — H7075/H7076 appear only in credits, and the H70xx table rows are appliances — so outdoor coverage is unclaimed and unverified here; (c) the codebase is largely AI-generated (CLAUDE.md present, commits co-authored by Claude models, automated end-of-day release routine), only 4 watchers, 8 months old, issue creation restricted, and no independent third-party audit or community corroboration was found."
+    },
+    {
+      "claim": "Recommended path: for maximum coverage pick ONE cloud-capable integration as the primary — lasswellt/govee-homeassistant if staying inside HA matters most, wez/govee2mqtt if battle-tested breadth matters more than avoiding an MQTT broker — and treat core govee_light_local as an optional local-latency layer only for the specific models whose LAN toggle exists, never as the coverage solution.",
+      "confidence": "medium",
+      "vote": "synthesis across unanimous claims 0-14; not independently verified as a recommendation",
+      "sources": [
+        "https://www.home-assistant.io/integrations/govee_light_local/",
+        "https://github.com/lasswellt/govee-homeassistant",
+        "https://github.com/wez/govee2mqtt/blob/main/docs/LAN.md",
+        "https://github.com/dekamaru/ha_govee_lan_control",
+        "https://github.com/LaggAt/hacs-govee"
+      ],
+      "evidence": "Reasoning chain from the verified facts: govee_light_local cannot deliver segments (no segment code in light.py), DIY/music/video (absent from library), or app scenes (11 hardcoded effects), and is gated on a per-device app toggle that many models never receive; hacs-govee is discontinued and stuck on the legacy API with four capabilities total; only the Platform-API-based options reach segment_color_setting / dynamic_scene / music_setting. How to identify what you have: Settings > Devices & Services — a card reading 'Govee lights local' (domain govee_light_local, no credentials, discovered via UDP) is the built-in LAN one; a HACS-installed card named 'Govee' backed by LaggAt is the abandoned cloud one (check HACS > custom_components/govee/manifest.json for version 2025.1.1 and requirement govee-api-laggat==0.2.2, and its README's Discontinuation section). Migration: from LaggAt, remove the config entry and the HACS repo before installing a successor, because both claim domain 'govee' and will collide; from govee_light_local you can keep it, but note the concrete stacking hazard — per dekamaru/ha_govee_lan_control's README, Govee devices always reply to UDP port 4002, so only ONE program on the host can listen on it; running govee_light_local alongside another LAN-capable tool (including lasswellt's LAN mode or govee2mqtt's LAN path) causes a port conflict, not merely duplicate entities. Duplicate entities from running LAN + cloud in parallel are avoided by disabling the redundant entity (not the device) on one side and pointing all automations at a single entity_id per physical light. Infrastructure honesty: govee2mqtt needs a container plus an MQTT broker plus HA's MQTT integration — three moving parts and a second discovery namespace — versus zero extra infrastructure for a HACS integration."
+    },
+    {
+      "claim": "Bluetooth-only Govee SKUs are a coverage hole that NO cloud or LAN integration can fill, so genuinely complete coverage may require a second, BLE-based integration alongside the primary one.",
+      "confidence": "medium",
+      "vote": "2-1 (derived from the govee2mqtt BLE claim plus its issue tracker)",
+      "sources": [
+        "https://github.com/wez/govee2mqtt/blob/main/docs/SKUS.md",
+        "https://github.com/wez/govee2mqtt/issues/99",
+        "https://github.com/wez/govee2mqtt/issues/220",
+        "https://github.com/wez/govee2mqtt/issues/228"
+      ],
+      "evidence": "All the WiFi-transport options (Platform API, undocumented IoT MQTT, LAN) inherently exclude devices with no WiFi radio. Documented BLE-only examples with open issues: H6127 strip (#99), H6102 (#92), H7002 outdoor string lights (#220, \"bluetooth only so should be excluded from controls\"). govee2mqtt maintains a dedicated 'ble-only' label with 10 issues. One partial exception: BLE sensors that report through a Govee WiFi gateway are readable via the cloud path (#228 H5109 pool thermometer, closed as completed). For direct control of BLE-only lights, the remaining routes are HA's built-in Govee BLE integration / govee-ble / LED-BLE, or an ESPHome Bluetooth proxy — none of which were verified in this round. lasswellt/govee-homeassistant does contain BLE code paths (switch.py legacy BLE music path, select.py BLE passthrough for DIY scenes, a fix(ble) commit on 25 Sep 2026), which suggests it may partially close this hole, but that was not independently verified."
+    }
+  ],
+  "summary": "For maximum Govee device coverage in late 2026, the answer is a cloud Platform-API-based integration, not the built-in LAN one: only openapi.api.govee.com exposes the capabilities the user needs (segment_color_setting, dynamic_scene with lightScene/diyScene/snapshot, music_setting). Home Assistant's core \"Govee Lights Local\" is excellent as a local-latency layer but is structurally incapable of the requirements — it creates exactly one light entity per device, has zero segment handling in code, and offers a fixed list of 11 hardcoded generic scenes instead of the user's Govee-app scene library, and it only works on lights whose per-device LAN Control toggle exists in the app. The old HACS \"Govee\" component (LaggAt/hacs-govee) is maintainer-declared discontinued, ~14 months stale with 158 open issues, pinned to a 2022 library hitting the legacy API, and supports only on/off, brightness, color temp and color — it must be removed, not migrated in place. The two viable maximum-coverage picks are wez/govee2mqtt (mature, actively developed, proven segments/DIY/music, but WiFi-only with no BLE and requiring a container plus an MQTT broker) and lasswellt/govee-homeassistant (an actively developed 2026 HACS rewrite of hacs-govee that stacks cloud v2 + MQTT push + LAN + some BLE inside HA, with explicit DreamView/TV-backlight switches, scene and DIY selectors, four segment modes and a set_segment_color action — the best fit for \"keep it inside HA,\" but young, largely AI-generated, and with no outdoor-light row in its own device table). Pick one primary cloud integration, add govee_light_local only for specific LAN-capable models, and be aware that two LAN listeners conflict on UDP port 4002.",
+  "caveats": "TIME-SENSITIVE: all repo metrics were verified 2026-09-28 and will drift — model counts in govee-local-api change with nearly every PR (271 shipped in HA core 3.1.0 vs 272 on develop), and lasswellt/govee-homeassistant ships roughly weekly releases (v2026.9.15 was published the day of verification). GAPS IN THIS RESEARCH ROUND: (1) Community consensus (research item 7) is effectively unevidenced — DuckDuckGo/Bing searches were blocked by bot challenges during verification, so no r/homeassistant, r/Govee or HA forum thread corroboration survived; all surviving claims rest on GitHub repos and Govee's own docs. (2) Matter/Thread (research item 5) produced no surviving claim; the only signal is a scope note that Govee's Matter lineup so far appears to be lights (e.g. H60B0), so whether Matter bypasses all of this is unresolved. (3) Per-SKU cloud coverage for the user's key differentiators is genuinely UNSETTLED: three claims asserting that Govee's supported-model list includes the H605x TV-backlight and H705x outdoor families were refuted or split 1-2, and developer.govee.com/docs/support-product-model returned HTTP 429 during checks. Treat \"the cloud API covers your TV kits and outdoor lights\" as probable but unverified. Likewise, a claim that T1/T2 (H6199, H6601/H6602) are absent from the LAN table was refuted 0-3, so their LAN status is unknown rather than known-absent. WEAK SOURCES: lasswellt/govee-homeassistant's coverage claims are maintainer self-reports in its own README with no third-party audit, 4 watchers, and a codebase largely generated by AI with automated releases — verify against your own SKUs before committing. \"Supported\" in every project here means implemented, not working: open Sept 2026 issues show DreamView returning HTTP 200 while sync never starts (H66A0), music mode failing, H605B power-off failing, and Govee's own API under-reporting segment counts (H7021 reports 15 of 30, H7026 indices 16-29 affect the whole string). NOMENCLATURE HAZARD: say \"openapi.api.govee.com Platform API (/router/api/v1/...)\" rather than \"v2\" — the legacy developer-api.govee.com genuinely does have a 10,000/day cap, so the no-daily-quota finding is only true for the newer endpoint. Finally, LaggAt/hacs-govee is discontinued but NOT GitHub-archived, so HACS gives no warning; avoid writing \"archived.\"",
+  "openQuestions": [
+    "Do the user's specific differentiator SKUs (Envisual/DreamView T1/T2 and H605x, plus Permanent Outdoor Lights Pro/Lite H705x) actually return segment_color_setting / dynamic_scene / music_setting in a live /router/api/v1/user/devices response? Verification was blocked by HTTP 429 on developer.govee.com/docs/support-product-model, and no surviving claim establishes it — this is the single most decision-relevant unknown and is answerable in minutes with a real API key and curl.",
+    "Does lasswellt/govee-homeassistant actually control H705x outdoor permanent lights (segments included)? Its README device table has no outdoor row, H7075/H7076 appear only in the credits, and all its H70xx table rows are appliances — so outdoor support is unclaimed. wez/govee2mqtt appears stronger here but this was never directly compared.",
+    "Does Govee's Matter/Thread rollout provide a local path with segment and scene control that bypasses both the LAN API and the cloud rate limits, and which 2026 SKUs ship Matter? No surviving claim addressed this, and it could invalidate the recommendation for newly purchased devices.",
+    "How do the two cloud options behave in practice under the 30 req/min/device state cap on a large install (20+ devices) — what default poll interval do they use, do they back off on 429, and does govee2mqtt's undocumented IoT MQTT channel actually deliver push state for lights (relieving REST polling) or only for appliances/sensors? The MQTT-push claim was refuted 1-2 and remains unresolved."
+  ],
+  "refuted": [
+    {
+      "claim": "The camera-based Envisual/DreamView TV backlight kits the user names (T1 = H6199, T2 = H6601/H6602) are absent from the supported-devices table entirely; the H605x entries that are listed (H6051, H6052, H6056, H6059, H605D) are TV/monitor backlight strips that report no segments at all, so zone/segment control is unavailable for them over LAN.",
+      "vote": "0-3",
+      "source": "https://github.com/Galorhallen/govee-local-api/blob/develop/SUPPORTED_DEVICES.md"
+    },
+    {
+      "claim": "Govee's LAN API only exposes a subset of device functionality (on/off, brightness, color/color-temperature); the cloud Platform API is required to control light effect modes and scenes — so the LAN-only path (i.e. HA core's Govee Light Local) structurally cannot deliver scenes/effects, and maximum coverage requires a cloud path.",
+      "vote": "0-3",
+      "source": "https://github.com/wez/govee2mqtt/blob/main/docs/SKUS.md"
+    },
+    {
+      "claim": "Govee's own v2 API documentation uses a TV/ambient backlight SKU (H605C) and a Permanent Outdoor Lights SKU (H7055) as canonical sample devices in the /router/api/v1/user/devices response, showing both categories are first-class citizens of the cloud Developer API v2 (and therefore of any HA integration built on it) with the same full color/segment/scene/DIY/music capability set as an ordinary bulb.",
+      "vote": "0-3",
+      "source": "https://developer.govee.com/reference/get-you-devices"
+    },
+    {
+      "claim": "It creates entities from capabilities Govee reports rather than a hard-coded SKU list, so unlisted models may work — but note the README's device tables never name outdoor lights (no H705x, Permanent Outdoor Lights, neon rope or string/flood lights), so outdoor coverage is unclaimed and unverified here.",
+      "vote": "0-3",
+      "source": "https://github.com/lasswellt/govee-homeassistant"
+    },
+    {
+      "claim": "Govee developer API v2 is capped at 100 requests/minute and 10,000 requests/day per key, and each state poll costs one request per device, so the polling interval (default 60 s, range 30-300 s) must be raised on large installs; a repair flow offers to double it, and the remaining daily count is only estimated locally because Govee never reports it.",
+      "vote": "0-3",
+      "source": "https://github.com/lasswellt/govee-homeassistant"
+    },
+    {
+      "claim": "Govee's official MQTT push channel only delivers events for devices whose capability list includes `devices.capabilities.event`; every documented example is an appliance or sensor (ice maker H7172 water shortage, presence sensor H5127, dehumidifier H7151 full-water), with no lighting SKU and no push of power/brightness/color state. This means the MQTT feed does NOT relieve REST polling quota for RGB strips, bulbs, TV/ambient backlight kits, or outdoor permanent lights — cloud integrations must still poll those over the rate-limited v2 REST API.",
+      "vote": "1-2",
+      "source": "https://developer.govee.com/reference/subscribe-device-event"
+    },
+    {
+      "claim": "Govee's official Developer API v2 supported-model list explicitly includes the H605x TV/ambient backlight family (H6050, H6051, H6052, H6054, H6056-H6059, H605A-H605D), meaning DreamView/Envisual-class TV kits are returned by the cloud v2 API and are therefore reachable by any cloud-API-based HA integration (Govee2MQTT, HACS cloud components).",
+      "vote": "1-2",
+      "source": "https://developer.govee.com/docs/support-product-model"
+    },
+    {
+      "claim": "The same list includes the H705x outdoor/permanent-outdoor-light family (H7050, H7051, H7052, H7053, H7055, H7057, H7058, H705A-H705F) plus wide H70Bx/H70Cx/H70Dx and H71xx outdoor ranges, so Govee Permanent Outdoor Lights and outdoor string/flood lines are covered by the cloud v2 API.",
+      "vote": "1-2",
+      "source": "https://developer.govee.com/docs/support-product-model"
+    },
+    {
+      "claim": "The cloud v2 API's supported-model surface is 327 distinct SKUs spanning four families — H5xxx (sensors/thermo-hygrometers), H6xxx (bulbs/strips/backlights), H7xxx (outdoor, string, appliance-class), and H8xxx — which is dramatically broader than the LAN-control SKU set and establishes the cloud API as the maximum-coverage transport.",
+      "vote": "0-3",
+      "source": "https://developer.govee.com/docs/support-product-model"
+    },
+    {
+      "claim": "The documented supported-model list does include TV/ambient backlight models in the H605x family (H6056, H6059, H605D) and the H705x outdoor/permanent-light family (H7050, H7051, H7052, H7053, H7055, H705A-H705F), plus H70C1/H70C2 and H6046/H6047 — so LAN coverage is not limited to simple bulbs and strips, though the page lists bare model numbers with no product-category labels such as outdoor or TV backlight.",
+      "vote": "1-2",
+      "source": "https://www.home-assistant.io/integrations/govee_light_local/"
+    }
+  ],
+  "unverified": [],
+  "sources": [
+    {
+      "url": "https://github.com/LaggAt/hacs-govee",
+      "quality": "primary",
+      "angle": "broad/primary landscape + maintenance status",
+      "claimCount": 5
+    },
+    {
+      "url": "https://community.home-assistant.io/search.json?q=govee",
+      "quality": "forum",
+      "angle": "broad/primary landscape + maintenance status",
+      "claimCount": 5
+    },
+    {
+      "url": "https://github.com/Galorhallen/govee-local-api/blob/develop/SUPPORTED_DEVICES.md",
+      "quality": "primary",
+      "angle": "device-coverage deep dive (the differentiators)",
+      "claimCount": 5
+    },
+    {
+      "url": "https://github.com/wez/govee2mqtt/blob/main/docs/SKUS.md",
+      "quality": "primary",
+      "angle": "device-coverage deep dive (the differentiators)",
+      "claimCount": 5
+    },
+    {
+      "url": "https://developer.govee.com/reference/get-you-devices",
+      "quality": "primary",
+      "angle": "cloud API technical constraints",
+      "claimCount": 5
+    },
+    {
+      "url": "https://github.com/lasswellt/govee-homeassistant",
+      "quality": "primary",
+      "angle": "cloud API technical constraints",
+      "claimCount": 5
+    },
+    {
+      "url": "https://developer.govee.com/reference/subscribe-device-event",
+      "quality": "primary",
+      "angle": "cloud API technical constraints",
+      "claimCount": 5
+    },
+    {
+      "url": "https://developer.govee.com/docs/support-product-model",
+      "quality": "primary",
+      "angle": "cloud API technical constraints",
+      "claimCount": 5
+    },
+    {
+      "url": "https://community.home-assistant.io/t/govee-integration-not-working-properly-error-429-rate-limit-exceeded/547411",
+      "quality": "forum",
+      "angle": "cloud API technical constraints",
+      "claimCount": 5
+    },
+    {
+      "url": "https://www.home-assistant.io/integrations/govee_light_local/",
+      "quality": "primary",
+      "angle": "local control: LAN API reality + Matter bypass",
+      "claimCount": 5
+    },
+    {
+      "url": "https://community.home-assistant.io/t/better-integration-for-govee-matter-lights-limited-functionality-in-home-assistant/950525",
+      "quality": "forum",
+      "angle": "local control: LAN API reality + Matter bypass",
+      "claimCount": 5
+    },
+    {
+      "url": "https://github.com/wez/govee2mqtt",
+      "quality": "primary",
+      "angle": "local control: LAN API reality + Matter bypass",
+      "claimCount": 5
+    },
+    {
+      "url": "https://github.com/wez/govee2mqtt/blob/main/docs/LAN.md",
+      "quality": "primary",
+      "angle": "local control: LAN API reality + Matter bypass",
+      "claimCount": 5
+    },
+    {
+      "url": "https://community.home-assistant.io/t/govee-matter-lights-unreliable-with-ha-scenes/970593",
+      "quality": "forum",
+      "angle": "local control: LAN API reality + Matter bypass",
+      "claimCount": 5
+    },
+    {
+      "url": "https://community.home-assistant.io/t/having-issues-with-govee-bulb-with-matter-over-wifi-unavailability-after-some-time/956730",
+      "quality": "forum",
+      "angle": "local control: LAN API reality + Matter bypass",
+      "claimCount": 5
+    },
+    {
+      "url": "https://community.home-assistant.io/t/having-problems-getting-the-govee-lights-local-integration-working/775190",
+      "quality": "forum",
+      "angle": "practitioner pain points, stacking, and community consensus",
+      "claimCount": 5
+    },
+    {
+      "url": "https://github.com/wez/govee2mqtt/issues/702",
+      "quality": "forum",
+      "angle": "practitioner pain points, stacking, and community consensus",
+      "claimCount": 5
+    },
+    {
+      "url": "https://community.home-assistant.io/t/work-around-for-movie-and-music-dreamview-using-the-govee-cloud-integration/1025519",
+      "quality": "forum",
+      "angle": "practitioner pain points, stacking, and community consensus",
+      "claimCount": 5
+    }
+  ],
+  "stats": {
+    "angles": 5,
+    "sourcesFetched": 18,
+    "claimsExtracted": 90,
+    "claimsVerified": 25,
+    "confirmed": 15,
+    "killed": 10,
+    "unverified": 0,
+    "afterSynthesis": 9,
+    "urlDupes": 11,
+    "budgetDropped": 1,
+    "agentCalls": 100
+  }
+}
