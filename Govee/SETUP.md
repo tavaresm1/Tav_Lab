@@ -5,6 +5,72 @@ Order matters. Step 2 before step 4, or the two integrations collide on the
 
 ---
 
+## 0. Prerequisites — install HACS
+
+**HACS does not ship with Home Assistant.** It is a separate community project
+you install yourself. Everything below depends on it.
+
+> ### ⚠️ The Add-on Store is the wrong place
+>
+> `lasswellt/govee-homeassistant` is a **custom integration** — Python that runs
+> inside Home Assistant. It is *not* an add-on (a Docker container) and *not* an
+> AppDaemon app.
+>
+> Pasting its URL into **Settings → Add-ons → Add-on Store → ⋮ → Repositories**
+> fails with **"is not a valid app repository"**. Nothing will ever make it
+> validate there. Same error if you use HACS's own dialog but leave the category
+> dropdown on *AppDaemon* instead of *Integration*.
+
+First check your installation type: **Settings → System → Repairs → ⋮ → System
+information → Installation Type.**
+
+### Home Assistant OS / Supervised
+
+1. Settings → Add-ons → **Add-on Store** → *Terminal & SSH* → Install → Start.
+   Not listed? Enable **Advanced Mode** in your user profile (click your name,
+   bottom-left) and reload.
+2. Open its **Terminal** tab:
+
+   ```bash
+   wget -O - https://get.hacs.xyz | bash -
+   ```
+
+3. Settings → System → ⋮ → **Restart Home Assistant**.
+
+### Container (Docker)
+
+Run it *inside* the container so it lands in the right config directory:
+
+```bash
+docker exec -it homeassistant bash -c 'wget -O - https://get.hacs.xyz | bash -'
+```
+
+Then restart the container. Substitute the real container name if not
+`homeassistant`.
+
+### Core (venv)
+
+Run the same script as the user owning the config directory, with that directory
+as the working dir, then restart the service.
+
+### Then, for all install types
+
+1. Settings → Devices & Services → **Add Integration** → **HACS**.
+2. It shows a GitHub device code. Open <https://github.com/login/device>, paste
+   it, authorize. **A GitHub account is required.**
+3. **HACS** appears in the left sidebar. If not, hard-refresh (Ctrl+Shift+R).
+
+### Alternative: skip HACS
+
+A manual install works — download the release zip, extract
+`custom_components/govee/` into HA's `config/custom_components/`, restart.
+
+Not recommended *here* specifically: this project ships **roughly weekly
+releases** (ten in September 2026 alone), and given the open per-SKU bugs in
+[GOTCHAS.md](GOTCHAS.md) you will want those updates. HACS makes it one click.
+
+---
+
 ## 1. Identify what is already installed
 
 **Settings → Devices & Services.** Read the card name:
@@ -62,10 +128,11 @@ outdoor and TV-backlight SKUs. If the outdoor lights come back bare, use
 
 ## 4. Install `lasswellt/govee-homeassistant`
 
-1. HACS → ⋮ → **Custom repositories**.
+1. HACS → ⋮ (top right) → **Custom repositories**.
 2. Repository: `https://github.com/lasswellt/govee-homeassistant`, category
-   **Integration**. Add.
-3. Find **Govee**, **Download**, restart Home Assistant.
+   **Integration** — not *AppDaemon*, see [step 0](#0-prerequisites--install-hacs). Add.
+3. Search HACS for **Govee Cloud Integration** → **Download** → restart Home
+   Assistant. It will not appear under Add Integration until HA restarts.
 4. Settings → Devices & Services → **Add Integration** → **Govee**. Paste the API
    key, complete 2FA.
 5. In the options flow, pick a **segment mode**:
@@ -139,9 +206,15 @@ No cloud or LAN integration can reach them — all the WiFi transports structura
 exclude a device with no WiFi radio. Known BLE-only examples: **H6102**, **H6127**
 strip, **H7002** outdoor string lights.
 
-Those need HA's built-in **Govee BLE** integration or an **ESPHome Bluetooth
-proxy** alongside the primary integration. Neither route was verified in this
-research round.
+**`lasswellt/govee-homeassistant` may cover these itself.** Its `manifest.json`
+declares real BLE discovery — `after_dependencies: [bluetooth]`,
+`dependencies: [bluetooth_adapters, network]`, and matchers for `Govee_*`,
+`ihoment_*`, `GBK_*` and manufacturer ID 34819. So try it before adding anything
+else, provided your HA host has a Bluetooth adapter in range of the devices.
+
+If that falls short, the fallbacks are HA's built-in **Govee BLE** integration or
+an **ESPHome Bluetooth proxy** alongside the primary integration. Neither was
+verified in this research round.
 
 One partial exception: BLE sensors that report through a Govee WiFi gateway are
 readable over the cloud path.

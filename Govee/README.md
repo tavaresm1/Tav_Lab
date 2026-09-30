@@ -51,7 +51,7 @@ integration.
 | TV backlight / DreamView | ✅ dedicated DreamView switch, music-mode switch, scene + DIY selects | ✅ scenes/DIY/music as light effects |
 | Segments | ✅ 4 segment modes + `govee.set_segment_color` action | ✅ discrete `Segment 00X` light entities |
 | Outdoor H705x | ⚠️ **unclaimed** — no outdoor row in its device table | ⚠️ probably better, never directly compared |
-| BLE-only devices | some BLE code paths (unverified) | ❌ none, by design |
+| BLE-only devices | ✅ native BLE discovery — confirmed in `manifest.json` | ❌ none, by design |
 | Non-light platforms | leak sensors, purifiers, fans | appliances, sensors |
 | Risk | young, largely AI-generated, 4 watchers, no third-party audit | per-SKU bugs, Govee-side auth lockout risk |
 
@@ -60,6 +60,22 @@ Features in the HACS option were confirmed **in code**, not just in its README:
 `device.supports_dreamview`; `switch.py:594` a music-mode switch; `select.py:141`
 DIY-scene selects; `const.py:436-444` the four segment modes;
 `services.yaml` defines `set_segment_color`, `refresh_scenes`, `send_raw_ptreal`.
+
+Its **BLE support is real**, not incidental — verified in `manifest.json`
+(fetched 2026-09-30), which is a meaningful advantage over govee2mqtt:
+
+```json
+"after_dependencies": ["bluetooth"],
+"dependencies": ["bluetooth_adapters", "network"],
+"bluetooth": [
+  {"local_name": "Govee_*"}, {"local_name": "ihoment_*"},
+  {"local_name": "GBK_*"}, {"manufacturer_id": 34819}
+]
+```
+
+Same file declares `iot_class: cloud_push` (so MQTT push, not bare polling) and
+`quality_scale: platinum` — the latter self-declared, not HA-audited, since this
+is not a core integration.
 
 ---
 
